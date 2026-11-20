@@ -13,7 +13,7 @@ Es gibt genau einen Port. Ob die Kamera mit SSL/TLS, mit STARTTLS oder
 unverschluesselt sendet, wird pro Verbindung automatisch erkannt.
 """
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 import asyncio
 import hmac
@@ -33,7 +33,6 @@ import warnings
 
 from aiosmtpd.smtp import SMTP, AuthResult, LoginPassword, TLSSetupException
 
-from archive import Archive
 from board import Board
 from store import Runtime, Store, drop_second_image
 import detect
@@ -68,7 +67,6 @@ TARGET_TIMEOUT = 60
 BACKUP_SKIP_SECONDS = int(os.environ.get("RELAY_BACKUP_SKIP", "600"))
 FAILOVER_DELAY = int(os.environ.get("RELAY_FAILOVER_DELAY", "2"))
 IDLE_TIMEOUT = 60
-ARCHIVE_DIR = os.environ.get("RELAY_ARCHIVE_DIR", "/share/kamera_bilder")
 DIAG_REFERENCE_HOST = os.environ.get("RELAY_DIAG_HOST", "smtp.gmail.com")
 
 # Der Standard erlaubt 1000 Zeichen pro Zeile. Manche Kameras halten sich nicht
@@ -76,8 +74,13 @@ DIAG_REFERENCE_HOST = os.environ.get("RELAY_DIAG_HOST", "smtp.gmail.com")
 SMTP.line_length_limit = 64 * 1024
 
 DEFAULTS = {
+    # Funktionen
+    "photo_storage": True,          # Fotos auf dem Share ablegen (aus: nur nicht weitergeleitete Fotos bleiben erhalten)
+    "forward_enabled": True,        # Fotos an das Ziel weiterleiten
+    "detect_enabled": True,         # Bilderkennung (Tier / Mensch / Fahrzeug / leer)
+    "detect_only_forward": False,   # nur Fotos mit Erkennung weiterleiten
     # Relay am Home Assistant
-    "relay_port": 20021,
+    "relay_port": 0,   # Pflichtfeld, kein Standard
     "relay_user": "",
     "relay_password": "",
     # Ziel-SMTP-Server
@@ -100,25 +103,18 @@ DEFAULTS = {
     "backup_user": "",
     "backup_password": "",
     "backup_sender": "",
-    "max_message_mb": 25,
+    "max_message_mb": 50,
     # Zustellung
-    "throttle_minutes": 5,
+    "throttle_minutes": 1,
     "send_delay_seconds": 3,
     "retry_minutes": 30,
     "retention_days": 180,
-    "storage_mb": 5120,
-    # Bildablage fuer die Analyse
-    "archive_enabled": False,
-    "archive_days": 30,
-    "archive_max_mb": 10240,
-    "archive_videos": False,
+    "storage_mb": 1024,
     # Bilderkennung (lokal, MegaDetector V6): markiert Mensch / Tier / Fahrzeug / leer
-    "detect_enabled": True,
-    "detect_filter": "aus",   # aus | test | an: nur Mails mit Erkennung weiterleiten
     "detect_threads": 1,
     "detect_threshold_tier": 25,
     "detect_threshold_mensch": 30,
-    "detect_threshold_fahrzeug": 50,
+    "detect_threshold_fahrzeug": 30,
 }
 
 # Gueltige Bereiche der Zahlenwerte (Minimum, Maximum)
@@ -129,8 +125,6 @@ LIMITS = {
     "retention_days": (1, 3650),
     "storage_mb": (50, 1000000),
     "backup_port": (1, 65535),
-    "archive_days": (1, 3650),
-    "archive_max_mb": (100, 10000000),
     "detect_threads": (1, 4),
     "detect_threshold_tier": (10, 95),
     "detect_threshold_mensch": (10, 95),
@@ -141,6 +135,7 @@ HOLD_MAX_SECONDS = 120   # laenger wartet keine Mail auf die Bilderkennung
 # Optionale Vorbelegung der Kameratabelle (Adresse, Klarname, Revier) aus einer JSON-Datei,
 # z. B. /share/kamera_relay/kameras_vorbelegung.json mit [["adresse@domain", "Klarname", "Revier"], ...].
 # Wird nur angelegt, wenn die Adresse noch nicht in der Kameratabelle steht - Aenderungen im Board bleiben erhalten.
+PHOTOS_DIR = os.environ.get("RELAY_PHOTOS_DIR", "/share/kamera_relay")
 CAMERAS_FILE = os.environ.get("RELAY_CAMERAS_FILE", "/share/kamera_relay/kameras_vorbelegung.json")
 
 
@@ -221,11 +216,17 @@ def load_config():
             value = clamped
         cfg[key] = value
 
-    cfg["detect_filter"] = str(cfg["detect_filter"]).strip().lower()
-    if cfg["detect_filter"] not in ("aus", "test", "an"):
-        log.warning("Einstellung detect_filter=%s ungueltig (aus, test, an) - Filter bleibt aus", cfg["detect_filter"])
-        cfg["detect_filter"] = "aus"
+    for key in ("photo_storage", "forward_enabled", "detect_enabled", "detect_only_forward"):
+        value = cfg[key]
+        cfg[key] = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "ja", "yes", "an", "on")
+    # intern: "an" = nur Fotos mit Erkennung weiterleiten (haelt Mails bis zur Entscheidung zurueck)
+    cfg["detect_filter"] = "an" if (cfg["detect_only_forward"] and cfg["detect_enabled"] and cfg["forward_enabled"]) else "aus"
     problems = []
+    try:
+        if not 1 <= int(cfg["relay_port"]) <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        problems.append("Relay-Port fehlt (frei waehlbar, z. B. 20023)")
     if not cfg["relay_user"]:
         problems.append("Relay-Benutzer fehlt")
     if not cfg["relay_password"]:
@@ -434,12 +435,11 @@ def fmt_dur(seconds):
 class RelayHandler:
     """Nimmt Mails an, speichert sie und uebergibt sie der Zustellung."""
 
-    def __init__(self, cfg, store, wake, archive=None, detector=None):
+    def __init__(self, cfg, store, wake, detector=None):
         self.cfg = cfg
         self.detector = detector
         self.store = store
         self.wake = wake
-        self.archive = archive
         self.allowed = set(cfg["allowed_domains"])
 
     async def handle_EHLO(self, server, session, envelope, hostname, responses):
@@ -487,8 +487,9 @@ class RelayHandler:
             content, zoom_dropped = await loop.run_in_executor(None, _only_first, content)
         try:
             hold = bool(self.detector and self.detector.ok and self.cfg["detect_filter"] == "an")
+            forward = bool(self.cfg["forward_enabled"])
             result = await loop.run_in_executor(
-                None, lambda: self.store.accept(peer, envelope.mail_from, rcpts, content, window, hold=hold)
+                None, lambda: self.store.accept(peer, envelope.mail_from, rcpts, content, window, hold=hold, forward=forward)
             )
         except Exception as exc:
             log.error("Mail von %s konnte nicht gespeichert werden: %r", peer, exc)
@@ -502,7 +503,8 @@ class RelayHandler:
         attach = info["n_images"] + info["n_videos"]
         note_session(
             session, "ok_mail" if attach else "ok_test",
-            "gedrosselt (gespeichert, nicht weitergeleitet)" if result["throttled"] else "",
+            ("Weiterleitung aus (gespeichert, nicht weitergeleitet)" if result["stored"] else
+             "gedrosselt (gespeichert, nicht weitergeleitet)") if result["throttled"] else "",
             camera=result["camera"] or None, mail_id=mail_id, size=len(content),
             n_images=info["n_images"], n_videos=info["n_videos"], subject=info.get("subject", ""), known=True,
         )
@@ -532,9 +534,9 @@ class RelayHandler:
                 self.cfg["storage_mb"],
             )
         cam_row = self.store.camera_map().get(result["camera"]) if result["camera"] else None
-        if cam_row is not None and cam_row["mails"] == 1 and not cam_row["name"] and not cam_row["revier"]:
+        if result["new_camera"] and cam_row is not None and not cam_row["name"] and not cam_row["revier"]:
             log.info("Neue Kamera erkannt: %s - bitte im Board unter 'Kameras' benennen", result["camera"])
-        if result["throttled"]:
+        if result["throttled"] and not result["stored"]:
             log.info(
                 "[#%d] GEDROSSELT: letzte weitergeleitete Mail dieser Kamera vor %s "
                 "(Limit %d Min) - gespeichert, nicht weitergeleitet (im Board erneut senden)",
@@ -548,24 +550,7 @@ class RelayHandler:
         else:
             log.info("[#%d] in der Warteschlange, Zustellung an %s:%s", mail_id,
                      self.cfg["target_host"], self.cfg["target_port"])
-        if self.archive is not None:
-            try:
-                saved = await loop.run_in_executor(
-                    None, self.archive.save, mail_id, rcpts, content, time.time(),
-                    result["throttled"], peer, self.store.label(result["camera"]),
-                )
-                self.archive.export_cameras(self.store.cameras())
-                if saved:
-                    log.info("[#%d] %d Datei(en) im Bildordner abgelegt", mail_id, saved)
-                    mails, freed = await loop.run_in_executor(None, self.archive.enforce_limit)
-                    if mails:
-                        log.warning(
-                            "Bildordner voll (%d MB) - %d aelteste Mail(s) geloescht, %.0f MB frei gemacht",
-                            self.cfg["archive_max_mb"], mails, freed / 1048576,
-                        )
-            except Exception as exc:  # die Ablage darf die Weiterleitung nie stoeren
-                log.error("[#%d] Ablage im Bildordner fehlgeschlagen: %r", mail_id, exc)
-            self.wake()
+        self.wake()
         return "250 OK"
 
 
@@ -617,9 +602,16 @@ def open_target(cfg):
         target.ehlo()
         if not target_uses_ssl(cfg) and (
             cfg["target_starttls"]
-            or (cfg.get("_auto_starttls") and target.has_extn("starttls"))
+            or (target.has_extn("starttls") and (cfg.get("_auto_starttls") or port in (587, 2525)))
         ):
-            target.starttls(context=ssl.create_default_context())
+            try:
+                target.starttls(context=ssl.create_default_context())
+            except ssl.SSLCertVerificationError as exc:   # groesste Kompatibilitaet: Zertifikatsfehler nicht fatal
+                _warn_unverified(host, exc)
+                target.close()
+                target = smtplib.SMTP(host, port, timeout=TARGET_TIMEOUT)
+                target.ehlo()
+                target.starttls(context=_unverified_context())
             target.ehlo()
         if cfg["target_user"]:
             target.login(cfg["target_user"], cfg["target_password"])
@@ -929,11 +921,10 @@ def day_bounds(ymd):
 class Maintenance(threading.Thread):
     """Raeumt alte Mails auf und schreibt jeden Tag einen Bericht ins Protokoll."""
 
-    def __init__(self, store, archive=None, wake=None):
+    def __init__(self, store, wake=None):
         super().__init__(name="maintenance", daemon=True)
         self.wake = wake
         self.store = store
-        self.archive = archive
         self.stop_event = threading.Event()
 
     def stop(self):
@@ -962,14 +953,6 @@ class Maintenance(threading.Thread):
                         log.warning("[#%d] Speicherlimit erreicht - aeltestes Foto geloescht", mail_id)
                 except Exception as exc:
                     log.error("Aufraeumen fehlgeschlagen: %r", exc)
-                if self.archive is not None:
-                    try:
-                        days = self.archive.purge(now)
-                        if days:
-                            log.info("Bildordner: %d Tagesordner aelter als %d Tage geloescht",
-                                     days, self.archive.days)
-                    except Exception as exc:
-                        log.error("Aufraeumen im Bildordner fehlgeschlagen: %r", exc)
             today = time.strftime("%Y-%m-%d")
             if today != day:
                 try:
@@ -1117,9 +1100,6 @@ class RelayServer:
         self.store = store
         self.runtime = runtime
         self.deliverer = Deliverer(cfg, store, runtime)
-        self.archive = None
-        if cfg["archive_enabled"]:
-            self.archive = Archive(ARCHIVE_DIR, cfg["archive_days"], cfg["archive_max_mb"], cfg["archive_videos"])
         self.detector = None
         if cfg["detect_enabled"]:
             if detect.available():
@@ -1130,12 +1110,12 @@ class RelayServer:
                     threads=cfg["detect_threads"], filter_mode=cfg["detect_filter"], wake=self.deliverer.wake)
             else:
                 log.warning("Bilderkennung aktiv, aber das Modell %s fehlt - Erkennung ist aus", detect.MODEL_PATH)
-        self.maintenance = Maintenance(store, self.archive, self.deliverer.wake)
+        self.maintenance = Maintenance(store, self.deliverer.wake)
         self.board = Board(
             cfg, store, runtime, self.deliverer.wake, BOARD_BIND, BOARD_PORT, BOARD_ALLOW,
-            self.archive, detector=self.detector,
+            detector=self.detector,
         )
-        self.handler = RelayHandler(cfg, store, self.deliverer.wake, self.archive, self.detector)
+        self.handler = RelayHandler(cfg, store, self.deliverer.wake, self.detector)
         self.auth = Authenticator(cfg["relay_user"], cfg["relay_password"])
         self.loop = None
         self._tasks = set()
@@ -1281,31 +1261,6 @@ class RelayServer:
             self.cfg["retention_days"],
             self.cfg["storage_mb"],
         )
-        if self.archive is None:
-            log.info("Bildablage: aus (nur Weiterleitung)")
-        else:
-            try:
-                os.makedirs(ARCHIVE_DIR, exist_ok=True)
-                probe = os.path.join(ARCHIVE_DIR, ".schreibtest")
-                with open(probe, "w") as fh:
-                    fh.write("ok")
-                os.remove(probe)
-                log.info(
-                    "Bildablage: an - Fotos%s nach %s, Aufbewahrung %d Tage, Speicherlimit %d MB "
-                    "(aelteste zuerst geloescht), belegt %.0f MB",
-                    " und Videos" if self.cfg["archive_videos"] else "",
-                    ARCHIVE_DIR,
-                    self.cfg["archive_days"],
-                    self.cfg["archive_max_mb"],
-                    self.archive.usage() / 1048576,
-                )
-                self.archive.export_cameras(self.store.cameras())
-                mails, freed = self.archive.enforce_limit()
-                if mails:
-                    log.warning("Bildordner ueber dem Limit - %d aelteste Mail(s) geloescht", mails)
-            except OSError as exc:
-                log.error("Bildablage: Ordner %s nicht beschreibbar (%s) - Weiterleitung laeuft trotzdem",
-                          ARCHIVE_DIR, exc)
         counts = self.store.counts()
         log.info(
             "Warteschlange beim Start: %d wartend, %d gescheitert, %d gedrosselt gespeichert",
@@ -1327,8 +1282,11 @@ class RelayServer:
         if self.tls_ctx is not None:
             background.append(self.loop.create_task(self._watch_certificate()))
         # Eigener Thread, damit ein haengender Zieltest das Beenden nicht aufhaelt
-        threading.Thread(target=check_target, args=(self.cfg,), name="zieltest", daemon=True).start()
-        if backup_enabled(self.cfg):
+        if self.cfg["forward_enabled"]:
+            threading.Thread(target=check_target, args=(self.cfg,), name="zieltest", daemon=True).start()
+        else:
+            log.info("Weiterleitung ist ausgeschaltet - Fotos werden nur gespeichert")
+        if self.cfg["forward_enabled"] and backup_enabled(self.cfg):
             threading.Thread(target=check_backup, args=(self.cfg,), name="backuptest", daemon=True).start()
 
         await stop.wait()
@@ -1366,13 +1324,21 @@ def main():
         sys.exit(1)
 
     try:
-        store = Store(DATA_DIR, cfg["retention_days"], cfg["storage_mb"])
+        store = Store(DATA_DIR, cfg["retention_days"], cfg["storage_mb"], share_dir=PHOTOS_DIR,
+                      use_share=cfg["photo_storage"], keep_sent=cfg["photo_storage"])
         NAME_STORE[0] = store
     except OSError as exc:
         log.error("Datenordner %s nicht nutzbar: %s", DATA_DIR, exc)
         sys.exit(1)
     store.recover()
     store.seed_cameras(load_seed_cameras())
+    if cfg["photo_storage"]:
+        moved = store.migrate_to_share()
+        if moved:
+            log.info("%d Foto(s) vom internen Speicher nach %s verschoben", moved, PHOTOS_DIR)
+        log.info("Fotoablage: an - %s/<Revier>/<Kamera>/", PHOTOS_DIR)
+    else:
+        log.info("Fotoablage: aus - nur nicht weitergeleitete Fotos werden aufbewahrt")
     runtime = Runtime()
 
     asyncio.run(RelayServer(cfg, tls_ctx, store, runtime).run())

@@ -1,4 +1,4 @@
-"""Warteschlange und Archiv der Kamera-Mails (SQLite + Dateien im Datenordner).
+"""Warteschlange und Fotospeicher der Kamera-Mails (SQLite + Dateien im Datenordner).
 
 Jede angenommene Mail liegt nur so lange als .eml-Datei im Ordner spool/, bis sie
 zugestellt oder entschieden ist (gedrosselt, gefiltert, gescheitert). Dauerhaft bleiben
@@ -14,6 +14,7 @@ Status einer Mail:
   throttled  durch die Drosselung nicht weitergeleitet
   held       wartet kurz auf die Bilderkennung (nur bei Filter "an")
   filtered   Bilderkennung hat nichts gefunden, nicht weitergeleitet
+  stored     Weiterleitung ist ausgeschaltet, Foto nur gespeichert
   discarded  (alt) Mail ohne Datei und ohne Foto
 """
 
@@ -97,12 +98,15 @@ CREATE TABLE IF NOT EXISTS cameras (
   mails INTEGER DEFAULT 0,
   second_image TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS reviere (
+  name TEXT PRIMARY KEY COLLATE NOCASE
+);
 """
 
 SESSION_OK = ("ok_mail", "ok_test")
 SESSION_FILTERS = {
     "all": None,
-    "open": ("failed", "discarded", "throttled", "filtered"),
+    "open": ("failed", "discarded", "throttled", "filtered", "stored"),
     "problems": "problems",
     "tests": ("ok_test",),
     "mails": ("ok_mail",),
@@ -120,10 +124,11 @@ DET_FILTERS = {
 
 FILTERS = {
     "all": None,
-    "open": ("failed", "discarded", "throttled", "filtered"),
+    "open": ("failed", "discarded", "throttled", "filtered", "stored"),
     "problems": ("failed", "discarded"),
     "throttled": ("throttled",),
     "filtered": ("filtered",),
+    "stored": ("stored",),
     "queued": ("queued", "sending", "held"),
     "sent": ("sent",),
 }
@@ -287,9 +292,31 @@ def build_mail(row, data, ext):
     return msg.as_bytes(policy=email.policy.SMTP)   # CRLF-Zeilenenden, sonst lehnt das Ziel die Mail ab
 
 
+class CameraError(ValueError):
+    """Kamera- oder Revierangabe nicht moeglich (doppelter Name, unbekanntes Revier, Ordner belegt)."""
+
+
+NO_REVIER = "Ohne Revier"
+
+
+def _san(text):
+    """Name fuer einen Ordner: Zeichen, die Dateisysteme nicht vertragen, entfallen."""
+    t = "".join(c for c in str(text or "") if c.isprintable() and c not in '/\\:*?"<>|')
+    return " ".join(t.split()).strip(" .")[:80]
+
+
+def placeholder_name(address):
+    """Vorlaeufiger Kameraname fuer noch nicht benannte Kameras, z. B. Neu-9ef05a."""
+    local = (address or "").split("@")[0]
+    return "Neu-" + (local.split("_")[-1] or local) if local else "Unbekannt"
+
+
 class Store:
-    def __init__(self, data_dir, retention_days=180, storage_mb=5120):
+    def __init__(self, data_dir, retention_days=180, storage_mb=1024, share_dir=None, use_share=False, keep_sent=True):
         self.dir = data_dir
+        self.share = share_dir            # Fotoordner auf dem Share (Revier/Kamera/Foto)
+        self.use_share = bool(use_share and share_dir)
+        self.keep_sent = bool(keep_sent)  # False: weitergeleitete Fotos werden nach der Zustellung geloescht
         self.spool = os.path.join(data_dir, "spool")
         self.previews = os.path.join(data_dir, "previews")
         os.makedirs(self.spool, exist_ok=True)
@@ -311,18 +338,24 @@ class Store:
                              ("det_boxes", "TEXT DEFAULT ''"), ("fav", "INTEGER DEFAULT 0"),
                              ("test_label", "TEXT DEFAULT ''"), ("test_confs", "TEXT DEFAULT ''"),
                              ("test_boxes", "TEXT DEFAULT ''"), ("test_model", "TEXT DEFAULT ''"),
-                             ("pbytes", "INTEGER DEFAULT 0")):
+                             ("pbytes", "INTEGER DEFAULT 0"), ("ppath", "TEXT DEFAULT ''")):
                 if col not in mail_cols:  # Bilderkennung (ab 1.11.0)
                     self.db.execute("ALTER TABLE mails ADD COLUMN %s %s" % (col, ddl))
             columns = [r[1] for r in self.db.execute("PRAGMA table_info(cameras)")]
             if "second_image" not in columns:  # Update von aelteren Versionen
                 self.db.execute("ALTER TABLE cameras ADD COLUMN second_image TEXT DEFAULT ''")
+            if "folder" not in columns:
+                self.db.execute("ALTER TABLE cameras ADD COLUMN folder TEXT DEFAULT ''")
             # Kameras, deren Mails schon vor der Tabelle angenommen wurden, nachtragen
             self.db.execute(
                 "INSERT OR IGNORE INTO cameras (address, first_seen, last_seen, mails)"
-                " SELECT camera, MIN(received), MAX(received), COUNT(*) FROM mails"
+                " SELECT camera, MIN(received), MAX(received), SUM(CASE WHEN n_images>0 THEN 1 ELSE 0 END) FROM mails"
                 " WHERE camera<>'' GROUP BY camera"
             )
+            # Reviere aus den bisherigen Freitext-Eintraegen uebernehmen
+            self.db.execute("INSERT OR IGNORE INTO reviere (name) SELECT DISTINCT revier FROM cameras WHERE revier<>''")
+            for r in self.db.execute("SELECT address FROM cameras WHERE folder=''").fetchall():
+                self._ensure_folder(r["address"])
             self.db.commit()
 
     # -- Hilfen ---------------------------------------------------------
@@ -331,19 +364,210 @@ class Store:
         return os.path.join(self.spool, "%d.eml" % int(mail_id))
 
     def preview_path(self, mail_id):
-        """Pfad des aufbewahrten Vorschaubilds (bleibt auch nach der Zustellung) oder None."""
-        for ext in PREVIEW_TYPE:
+        """Pfad des aufbewahrten Fotos (bleibt auch nach der Zustellung) oder None."""
+        with self.lock:
+            row = self.db.execute("SELECT ppath FROM mails WHERE id=?", (int(mail_id),)).fetchone()
+        rel = row["ppath"] if row else ""
+        if rel:
+            for root in (self.share, self.previews):
+                if root and os.path.isfile(os.path.join(root, rel)):
+                    return os.path.join(root, rel)
+        for ext in PREVIEW_TYPE:   # Fotos aus aelteren Staenden: previews/<id>.<ext>
             path = os.path.join(self.previews, "%d.%s" % (int(mail_id), ext))
             if os.path.isfile(path):
                 return path
         return None
 
-    def _remove_preview(self, mail_id):
+    def _prune_dirs(self, path):
+        """Leere Ordner (Kamera, Revier) unterhalb des Share-Fotoordners entfernen."""
+        if not self.share:
+            return
+        root = os.path.abspath(self.share)
+        cur = os.path.dirname(os.path.abspath(path))
+        while cur.startswith(root + os.sep):
+            try:
+                os.rmdir(cur)
+            except OSError:
+                break
+            cur = os.path.dirname(cur)
+
+    def _remove_preview(self, mail_id, path=None):
+        """Foto loeschen. path: zuvor ermittelter Pfad (die Zeile ist beim Aufruf oft schon geloescht)."""
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self._prune_dirs(path)
         for ext in PREVIEW_TYPE:
             try:
                 os.remove(os.path.join(self.previews, "%d.%s" % (int(mail_id), ext)))
             except OSError:
                 pass
+
+    # -- Ordner, Kameras, Reviere ------------------------------------------
+
+    def _eff(self, address, name, revier):
+        rev = _san(revier) or NO_REVIER
+        nm = _san(name) or _san(placeholder_name(address)) or "Unbekannt"
+        return rev, nm
+
+    def _taken(self, rev, nm, except_addr):
+        key = (rev.casefold(), nm.casefold())
+        for r in self.db.execute("SELECT address, name, revier FROM cameras WHERE address<>?", (except_addr,)):
+            if tuple(x.casefold() for x in self._eff(r["address"], r["name"], r["revier"])) == key:
+                return True
+        return False
+
+    def _ensure_folder(self, address):
+        """Ordner (Revier/Name) einer Kamera, bei neuen Kameras automatisch vergeben."""
+        if not address:
+            return "%s/Unbekannt" % NO_REVIER
+        row = self.db.execute("SELECT name, revier, folder FROM cameras WHERE address=?", (address,)).fetchone()
+        if row is None:
+            return "%s/%s" % (NO_REVIER, _san(placeholder_name(address)))
+        if row["folder"]:
+            return row["folder"]
+        rev, nm = self._eff(address, row["name"], row["revier"])
+        cand, n = nm, 1
+        while self._taken(rev, cand, address):
+            n += 1
+            cand = "%s-%d" % (nm, n)
+        folder = "%s/%s" % (rev, cand)
+        self.db.execute("UPDATE cameras SET folder=? WHERE address=?", (folder, address))
+        return folder
+
+    def _move_prefix(self, old, new):
+        """Ordner auf dem Share umbenennen/verschieben und die Pfade in der Datenbank nachziehen."""
+        if old == new:
+            return
+        if self.share:
+            src, dst = os.path.join(self.share, old), os.path.join(self.share, new)
+            if os.path.isdir(src):
+                try:
+                    if os.path.isdir(dst) and not os.listdir(dst):
+                        os.rmdir(dst)
+                    if os.path.exists(dst):
+                        raise CameraError("Der Ordner %s existiert schon und ist nicht leer." % new)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    os.rename(src, dst)
+                except OSError as exc:
+                    raise CameraError("Ordner %s konnte nicht nach %s verschoben werden: %s" % (old, new, exc))
+                self._prune_dirs(src)
+        n = len(old) + 1
+        self.db.execute("UPDATE mails SET ppath=? || substr(ppath, ?) WHERE substr(ppath, 1, ?)=?",
+                        (new + "/", n + 1, n, old + "/"))
+        self.db.execute("UPDATE cameras SET folder=? || substr(folder, ?) WHERE folder=? OR substr(folder, 1, ?)=?",
+                        (new, len(old) + 1, old, n, old + "/"))
+
+    def reviere(self):
+        """Pflegeliste der Reviere mit der Anzahl zugeordneter Kameras."""
+        return self._query(
+            "SELECT r.name AS name, (SELECT COUNT(*) FROM cameras c WHERE c.revier=r.name COLLATE NOCASE) AS cameras"
+            " FROM reviere r ORDER BY r.name COLLATE NOCASE")
+
+    def _clean(self, text):
+        return " ".join("".join(c for c in str(text) if c.isprintable()).split())[:80]
+
+    def _revier_clash(self, name, except_name=None):
+        key = _san(name).casefold()
+        for r in self.db.execute("SELECT name FROM reviere").fetchall():
+            if except_name is not None and r["name"].casefold() == except_name.casefold():
+                continue
+            if _san(r["name"]).casefold() == key:
+                return True
+        return key == NO_REVIER.casefold()
+
+    def add_revier(self, name):
+        name = self._clean(name)
+        if not _san(name):
+            raise CameraError("Bitte einen Namen fuer das Revier angeben.")
+        with self.lock:
+            if self._revier_clash(name):
+                raise CameraError("Das Revier %s gibt es schon." % name)
+            self.db.execute("INSERT INTO reviere (name) VALUES (?)", (name,))
+            self.db.commit()
+
+    def rename_revier(self, old, new):
+        new = self._clean(new)
+        if not _san(new):
+            raise CameraError("Bitte einen Namen fuer das Revier angeben.")
+        with self.lock:
+            row = self.db.execute("SELECT name FROM reviere WHERE name=?", (old,)).fetchone()
+            if row is None:
+                raise CameraError("Das Revier %s gibt es nicht." % old)
+            old = row["name"]
+            if new == old:
+                return
+            if self._revier_clash(new, except_name=old):
+                raise CameraError("Das Revier %s gibt es schon." % new)
+            try:
+                self._move_prefix(_san(old), _san(new))
+                self.db.execute("UPDATE reviere SET name=? WHERE name=?", (new, old))
+                self.db.execute("UPDATE cameras SET revier=? WHERE revier=? COLLATE NOCASE", (new, old))
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
+
+    def delete_revier(self, name):
+        with self.lock:
+            n = self.db.execute("SELECT COUNT(*) FROM cameras WHERE revier=? COLLATE NOCASE", (name,)).fetchone()[0]
+            if n:
+                raise CameraError("Das Revier %s hat noch %d Kamera(s) und kann nicht geloescht werden." % (name, n))
+            self.db.execute("DELETE FROM reviere WHERE name=?", (name,))
+            self.db.commit()
+
+    def _write_photo(self, mail_id, camera, now, data, ext):
+        """Foto speichern: auf dem Share (Revier/Kamera) oder, wenn das nicht geht, intern. Gibt den relativen Pfad zurueck."""
+        name = "%s_%d.%s" % (time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(now)), mail_id, ext)
+        if self.use_share:
+            rel = "%s/%s" % (self._ensure_folder(camera), name)
+            full = os.path.join(self.share, rel)
+            try:
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, "wb") as fh:
+                    fh.write(data)
+                return rel
+            except OSError as exc:
+                log.warning("[#%s] Foto konnte nicht auf dem Share gespeichert werden (%s) - es bleibt intern", mail_id, exc)
+        rel = "%d.%s" % (mail_id, ext)
+        with open(os.path.join(self.previews, rel), "wb") as fh:
+            fh.write(data)
+        return rel
+
+    def migrate_to_share(self):
+        """Interne Fotos (previews/) auf den Share verschieben, wenn die Ablage dort an ist."""
+        if not self.use_share:
+            return 0
+        moved = 0
+        for name in sorted(os.listdir(self.previews)):
+            stem, _, ext = name.rpartition(".")
+            if not stem.isdigit() or ext not in PREVIEW_TYPE:
+                continue
+            mid = int(stem)
+            with self.lock:
+                row = self.db.execute("SELECT received, camera FROM mails WHERE id=?", (mid,)).fetchone()
+            if row is None:
+                continue
+            src = os.path.join(self.previews, name)
+            try:
+                with open(src, "rb") as fh:
+                    data = fh.read()
+                rel = self._write_photo(mid, row["camera"], row["received"], data, ext)
+            except OSError:
+                continue
+            if rel == name:   # Share nicht beschreibbar
+                break
+            with self.lock:
+                self.db.execute("UPDATE mails SET ppath=? WHERE id=?", (rel, mid))
+                self.db.commit()
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+            moved += 1
+        return moved
 
     def _remove_file(self, mail_id):
         try:
@@ -374,7 +598,7 @@ class Store:
 
     # -- Annahme --------------------------------------------------------
 
-    def accept(self, peer, mail_from, rcpts, content, window_seconds, now=None, hold=False):
+    def accept(self, peer, mail_from, rcpts, content, window_seconds, now=None, hold=False, forward=True):
         """Speichert eine Mail und entscheidet, ob sie weitergeleitet oder gedrosselt wird."""
         now = time.time() if now is None else now
         info = inspect_mail(content)
@@ -388,7 +612,9 @@ class Store:
                 ).fetchone()[0]
                 throttled = last is not None and (now - last) < window_seconds
             # hold: Mail mit Foto wartet, bis die Bilderkennung entschieden hat (Filter "an")
-            if throttled:
+            if not forward:
+                status, throttled = "stored", True      # Weiterleitung aus: nur speichern
+            elif throttled:
                 status = "throttled"
             elif hold and info["n_images"]:
                 status = "held"
@@ -418,13 +644,17 @@ class Store:
                     ),
                 )
                 mail_id = cur.lastrowid
+                new_camera = False
                 if camera:
+                    new_camera = self.db.execute("SELECT 1 FROM cameras WHERE address=?", (camera,)).fetchone() is None
+                    photo = 1 if info["n_images"] else 0   # gezaehlt werden nur Mails mit Foto
                     self.db.execute(
                         "INSERT INTO cameras (address, first_seen, last_seen, mails)"
-                        " VALUES (?,?,?,1) ON CONFLICT(address) DO UPDATE SET"
-                        " last_seen=excluded.last_seen, mails=mails+1",
-                        (camera, now, now),
+                        " VALUES (?,?,?,?) ON CONFLICT(address) DO UPDATE SET"
+                        " last_seen=excluded.last_seen, mails=mails+?",
+                        (camera, now, now, photo, photo),
                     )
+                    self._ensure_folder(camera)
                 tmp = self.path(mail_id) + ".tmp"
                 with open(tmp, "wb") as fh:
                     fh.write(content)
@@ -433,9 +663,8 @@ class Store:
                 if info["preview_type"] == "image":
                     found = preview_image(content, info["preview"])
                     if found:
-                        with open(os.path.join(self.previews, "%d.%s" % (mail_id, found[1])), "wb") as fh:
-                            fh.write(found[0])
-                        self.db.execute("UPDATE mails SET pbytes=? WHERE id=?", (len(found[0]), mail_id))
+                        rel = self._write_photo(mail_id, camera, now, found[0], found[1])
+                        self.db.execute("UPDATE mails SET pbytes=?, ppath=? WHERE id=?", (len(found[0]), rel, mail_id))
                         self.db.commit()
                         if throttled:
                             self._shed(mail_id)
@@ -451,6 +680,8 @@ class Store:
             "discarded": discarded,
             "info": info,
             "camera": camera,
+            "new_camera": new_camera,
+            "stored": not forward,
         }
 
     # -- Kameras (Klarname und Revier) ----------------------------------
@@ -462,10 +693,15 @@ class Store:
         with self.lock:
             for address, name, revier in entries:
                 address = address.strip().lower()
-                self.db.execute(
+                revier = self._clean(revier)
+                cur = self.db.execute(
                     "INSERT OR IGNORE INTO cameras (address, name, revier) VALUES (?,?,?)",
-                    (address, name, revier),
+                    (address, self._clean(name), revier),
                 )
+                if revier:
+                    self.db.execute("INSERT OR IGNORE INTO reviere (name) VALUES (?)", (revier,))
+                if cur.rowcount:
+                    self._ensure_folder(address)
             self.db.commit()
 
     def cameras(self):
@@ -533,26 +769,36 @@ class Store:
         return [r["camera"] for r in rows]
 
     def set_camera(self, address, name, revier, second_image=None):
-        """Speichert Klarname, Revier und (optional) die Behandlung des 2. Fotos.
-
-        second_image: '' = weiterleiten und ablegen, 'archive' = nur ablegen,
-        'drop' = verwerfen, None = unveraendert lassen."""
-        clean = lambda text: " ".join("".join(c for c in str(text) if c.isprintable()).split())[:80]
+        """Speichert Klarname und Revier. Der Name muss im Revier eindeutig sein, das Revier muss
+        in der Pflegeliste stehen. Der Foto-Ordner wird umbenannt bzw. verschoben.
+        Wirft CameraError bei einem Konflikt, dann bleibt alles unveraendert."""
         address = address.strip().lower()
         if not address:
             return False
+        name, revier = self._clean(name), self._clean(revier)
         with self.lock:
-            cur = self.db.execute(
-                "UPDATE cameras SET name=?, revier=? WHERE address=?",
-                (clean(name), clean(revier), address),
-            )
-            if second_image is not None and cur.rowcount > 0:
-                mode = second_image if second_image in ("archive", "drop") else ""
-                self.db.execute(
-                    "UPDATE cameras SET second_image=? WHERE address=?", (mode, address)
-                )
-            self.db.commit()
-            return cur.rowcount > 0
+            row = self.db.execute("SELECT * FROM cameras WHERE address=?", (address,)).fetchone()
+            if row is None:
+                return False
+            if revier:
+                known = self.db.execute("SELECT name FROM reviere WHERE name=?", (revier,)).fetchone()
+                if known is None:
+                    raise CameraError("Das Revier %s gibt es nicht. Bitte zuerst im Reiter Reviere anlegen." % revier)
+                revier = known["name"]
+            rev, nm = self._eff(address, name, revier)
+            if self._taken(rev, nm, address):
+                raise CameraError("Im Revier %s gibt es schon eine Kamera mit dem Namen %s." % (revier or NO_REVIER, nm))
+            new_folder = "%s/%s" % (rev, nm)
+            try:
+                if row["folder"]:
+                    self._move_prefix(row["folder"], new_folder)
+                self.db.execute("UPDATE cameras SET name=?, revier=?, folder=? WHERE address=?",
+                                (name, revier, new_folder, address))
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
+            return True
 
     def second_image_mode(self, address):
         rows = self._query(
@@ -609,6 +855,15 @@ class Store:
             (attempts, now, mail_id),
         )
         self._remove_file(mail_id)
+        if not self.keep_sent:   # keine Ablage gewuenscht: weitergeleitete Fotos werden nicht aufbewahrt
+            self._drop_photo(mail_id)
+
+    def _drop_photo(self, mail_id):
+        photo = self.preview_path(mail_id)
+        with self.lock:
+            self.db.execute("UPDATE mails SET pbytes=0, ppath='' WHERE id=?", (mail_id,))
+            self.db.commit()
+        self._remove_preview(mail_id, photo)
 
     def mark_retry(self, mail_id, attempts, next_attempt, error):
         self._exec(
@@ -661,7 +916,7 @@ class Store:
         now = time.time() if now is None else now
         with self.lock:
             row = self.db.execute("SELECT * FROM mails WHERE id=?", (mail_id,)).fetchone()
-            if row is None or row["status"] not in ("throttled", "failed", "filtered", "sent", "discarded"):
+            if row is None or row["status"] not in ("throttled", "failed", "filtered", "stored", "sent", "discarded"):
                 return False
             size = row["size"]
             if not os.path.isfile(self.path(mail_id)):
@@ -693,11 +948,12 @@ class Store:
         return [i for i in ids if self.requeue(i, now)]
 
     def delete(self, mail_id):
+        photo = self.preview_path(mail_id)
         with self.lock:
             self.db.execute("DELETE FROM mails WHERE id=?", (mail_id,))
             self.db.commit()
         self._remove_file(mail_id)
-        self._remove_preview(mail_id)
+        self._remove_preview(mail_id, photo)
 
     def delete_many(self, ids):
         """Loescht Mails (nur solche, die nicht gerade auf die Zustellung warten; Favoriten bleiben)."""
@@ -707,10 +963,11 @@ class Store:
                 row = self.db.execute("SELECT status, fav FROM mails WHERE id=?", (mail_id,)).fetchone()
                 if row is None or row["fav"] or row["status"] in ("queued", "sending"):
                     continue
+                photo = self.preview_path(mail_id)
                 self.db.execute("DELETE FROM mails WHERE id=?", (mail_id,))
                 self.db.commit()
             self._remove_file(mail_id)
-            self._remove_preview(mail_id)
+            self._remove_preview(mail_id, photo)
             done.append(mail_id)
         return done
 
@@ -753,22 +1010,35 @@ class Store:
                 args.extend(addresses)
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
 
-    def list_rows(self, flt="all", limit=300, addresses=None, det=""):
+    def list_rows(self, flt="all", limit=1000, addresses=None, det=""):
         where, args = self._where(flt, addresses, det=det)
         return self._query("SELECT * FROM mails%s ORDER BY id DESC LIMIT ?" % where, (*args, limit))
 
-    def gallery_rows(self, addresses=None, scan=5000, limit=1000, since=None, until=None, det="", fav=False):
+    def gallery_rows(self, addresses=None, scan=5000, limit=1000, since=None, until=None, det="", fav=False,
+                     flt="all", before_id=None):
         """Neueste Mails mit Foto (fuer die Bilderseite); aeltere Eintraege ohne Bild werden uebersprungen.
-        since/until: Empfangszeit (Unix-Sekunden), since einschliesslich, until ausschliesslich."""
-        where, args = self._where("all", addresses, since, until, det, fav)
+        since/until: Empfangszeit (Unix-Sekunden), since einschliesslich, until ausschliesslich.
+        before_id: nur Eintraege mit kleinerer Nummer (Seitenweises Nachladen)."""
+        where, args = self._where(flt, addresses, since, until, det, fav)
         where += (" AND" if where else " WHERE") + " preview_type='image'"
-        rows = self._query("SELECT * FROM mails%s ORDER BY id DESC LIMIT ?" % where, (*args, scan))
-        out = []
-        for r in rows:
-            if r["has_file"] or self.preview_path(r["id"]):
-                out.append(r)
-                if len(out) >= limit:
-                    break
+        if before_id:
+            where += " AND id<?"
+            args = (*args, int(before_id))
+        out, last = [], None
+        while len(out) < limit:
+            lim = "" if last is None else " AND id<?"
+            rows = self._query("SELECT * FROM mails%s%s ORDER BY id DESC LIMIT ?" % (where, lim),
+                               (*args, *(() if last is None else (last,)), scan))
+            if not rows:
+                break
+            for r in rows:
+                last = r["id"]
+                if r["has_file"] or self.preview_path(r["id"]):
+                    out.append(r)
+                    if len(out) >= limit:
+                        break
+            if len(rows) < scan:
+                break
         return out
 
     # -- Bilderkennung ----------------------------------------------------
@@ -951,10 +1221,11 @@ class Store:
                 ).fetchone()
                 if row is None:
                     break
+                photo = self.preview_path(row["id"])
                 self.db.execute("DELETE FROM mails WHERE id=?", (row["id"],))
                 self.db.commit()
                 self._remove_file(row["id"])
-                self._remove_preview(row["id"])
+                self._remove_preview(row["id"], photo)
                 removed.append(row["id"])
                 total -= row["pbytes"] or (row["size"] if row["has_file"] else 0)
             if removed:
@@ -970,12 +1241,13 @@ class Store:
                 "SELECT id FROM mails WHERE received<? AND fav=0 AND status NOT IN ('queued','sending','held')",
                 (cutoff,),
             ).fetchall()
+            photos = {row["id"]: self.preview_path(row["id"]) for row in rows}
             for row in rows:
                 self.db.execute("DELETE FROM mails WHERE id=?", (row["id"],))
             self.db.execute("DELETE FROM sessions WHERE started<?", (cutoff,))
             self.db.commit()
         for row in rows:
             self._remove_file(row["id"])
-            self._remove_preview(row["id"])
+            self._remove_preview(row["id"], photos.get(row["id"]))
         discarded = self._enforce_cap()
         return len(rows), discarded

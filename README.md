@@ -18,8 +18,10 @@ Unterstützt aarch64 (z. B. Raspberry Pi 5) und amd64.
 
 - Mail-Annahme mit Login, Drosselung je Kamera, Zustellung mit Wiederholung, optionaler Backup-Server
 - Das Foto steht im Mittelpunkt: Status, Kamera und Empfängeradresse liegen am Foto, jedes Foto lässt sich neu senden
-- Bilderseite mit Popup, Zoom, Diashow und Favoriten
-- Bilderkennung lokal auf dem Gerät, Filter *aus / test / an*
+- Fotos auf dem Share nach Revier und Kamera (`/share/kamera_relay/<Revier>/<Klarname>/`), Pflegeliste der Reviere
+- Bilderseite mit Galerie/Liste, Popup, Zoom, Diashow (Richtung umschaltbar) und Favoriten
+- Bilderkennung lokal auf dem Gerät, optional nur Fotos mit Erkennung weiterleiten
+- Schalter für Fotoablage und Weiterleitung (auch als reines Relay oder reine Ablage nutzbar)
 - Modelle austauschen und testen, ohne das Add-on neu zu bauen
 
 Die ausführliche Beschreibung steht in [DOCS.md](kamera_smtp_relay/DOCS.md).

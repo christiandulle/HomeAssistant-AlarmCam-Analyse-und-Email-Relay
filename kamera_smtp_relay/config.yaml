@@ -1,5 +1,5 @@
 name: "AlarmCam Analyse und Mail-Relay"
-version: "1.0.0"
+version: "1.1.0"
 slug: "kamera_smtp_relay"
 description: "Zentrale Alarmmail-Verwaltung für Kameras mit Bildanalyse und selektiver Weiterleitung."
 arch:
@@ -19,15 +19,16 @@ map:
   - type: share
     read_only: false
 options:
+  photo_storage: true
+  forward_enabled: true
   detect_enabled: true
-  detect_filter: "aus"
-  relay_port: 20023
+  detect_only_forward: false
   relay_user: ""
   relay_password: ""
   target_host: "smtp.revierspion.de"
+  target_port: 25
   target_user: "revierspion"
   target_password: ""
-  target_port: 25
   allowed_domains: "revierspion.de"
   target_sender: ""
   backup_host: ""
@@ -35,45 +36,40 @@ options:
   backup_user: ""
   backup_password: ""
   backup_sender: ""
-  throttle_minutes: 5
+  throttle_minutes: 1
   send_delay_seconds: 3
-  archive_enabled: false
-  archive_days: 30
-  archive_max_mb: 10240
+  retry_minutes: 30
+  retention_days: 180
+  storage_mb: 1024
+  detect_threads: 1
+  detect_threshold_tier: 25
+  detect_threshold_mensch: 30
+  detect_threshold_fahrzeug: 30
 schema:
+  photo_storage: bool
+  forward_enabled: bool
   detect_enabled: bool
-  detect_filter: "list(aus|test|an)?"
+  detect_only_forward: bool
   relay_port: port
   relay_user: str
   relay_password: password
   target_host: str
+  target_port: port
   target_user: str
   target_password: password
-  target_port: port
   allowed_domains: str
   target_sender: str
-  backup_host: "str?"
-  backup_port: "port?"
-  backup_user: "str?"
-  backup_password: "password?"
-  backup_sender: "str?"
-  throttle_minutes: "int(0,1440)?"
-  send_delay_seconds: "int(0,300)?"
-  archive_enabled: "bool?"
-  archive_days: "int(1,3650)?"
-  archive_max_mb: "int(100,10000000)?"
-  archive_videos: "bool?"
-  detect_threads: "int(1,4)?"
-  detect_threshold_tier: "int(10,95)?"
-  detect_threshold_mensch: "int(10,95)?"
-  detect_threshold_fahrzeug: "int(10,95)?"
-  retry_minutes: "int(0,1440)?"
-  retention_days: "int(1,3650)?"
-  storage_mb: "int(50,1000000)?"
-  require_tls: "bool?"
-  tls_compat: "bool?"
-  certfile: "str?"
-  keyfile: "str?"
-  target_ssl: "bool?"
-  target_starttls: "bool?"
-  max_message_mb: "int(1,50)?"
+  backup_host: str
+  backup_port: port
+  backup_user: str
+  backup_password: password
+  backup_sender: str
+  throttle_minutes: "int(0,1440)"
+  send_delay_seconds: "int(0,300)"
+  retry_minutes: "int(0,1440)"
+  retention_days: "int(1,3650)"
+  storage_mb: "int(50,1000000)"
+  detect_threads: "int(1,4)"
+  detect_threshold_tier: "int(10,95)"
+  detect_threshold_mensch: "int(10,95)"
+  detect_threshold_fahrzeug: "int(10,95)"

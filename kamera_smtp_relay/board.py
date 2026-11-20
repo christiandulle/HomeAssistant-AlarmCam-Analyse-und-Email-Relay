@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from email.parser import BytesParser
 
 import detect as _detect
-from store import DET_FILTERS, PREVIEW_TYPE
+from store import DET_FILTERS, FILTERS, PREVIEW_TYPE, CameraError, placeholder_name
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -45,6 +45,7 @@ STATUS = {
     "throttled": ("gedrosselt", "amber"),
     "held": ("pr\u00fcfe Foto", "blue"),
     "filtered": ("ohne Erkennung", "amber"),
+    "stored": ("Weiterleitung aus", "amber"),
     "discarded": ("verworfen", "grey"),
 }
 
@@ -54,6 +55,7 @@ TABS = (
     ("problems", "Gescheitert"),
     ("throttled", "Gedrosselt"),
     ("filtered", "Ohne Erkennung"),
+    ("stored", "Weiterleitung aus"),
     ("queued", "Wartend"),
     ("sent", "Zugestellt"),
 )
@@ -63,7 +65,7 @@ LIGHTBOX = """
 <div class="cap" id="lbc"></div>
 <div class="stage"><button class="nav" id="lbp" title="Zur&uuml;ck (&larr;)">&#8249;</button>
 <img id="lbi" alt=""><button class="nav" id="lbn" title="Weiter (&rarr;)">&#8250;</button></div>
-<div class="ctl"><button id="lbplay" title="Abspielen / Pause (Leertaste)">&#9654;</button>
+<div class="ctl"><button id="lbplay" title="Abspielen / Pause (Leertaste)">&#9654;</button><button id="lbdir" title="Abspielrichtung umschalten"></button>
 <button id="lbbx" title="Rahmen um erkannte Objekte ein-/ausblenden">Rahmen</button><span class="lbl">Tempo</span><input type="range" id="lbs" min="100" max="3000" step="100" value="800"
 title="Anzeigedauer pro Foto"><span class="lbl" id="lbv">0,8 s</span></div>
 <div id="lbd"></div><div id="lbb"></div></div>
@@ -71,7 +73,22 @@ title="Anzeigedauer pro Foto"><span class="lbl" id="lbv">0,8 s</span></div>
 (function(){
 var lb=document.getElementById('lb'),im=document.getElementById('lbi'),cap=document.getElementById('lbc');
 var prev=document.getElementById('lbp'),next=document.getElementById('lbn'),pb=document.getElementById('lbplay');
-var sel=document.getElementById('lbs'),list=[],pos=0,playing=false,timer=null;
+var sel=document.getElementById('lbs'),list=[],pos=0,playing=false,timer=null,loading=false;
+var dirb=document.getElementById('lbdir'),fwd=false;
+try{fwd=localStorage.getItem('kameraDir')==='fwd';}catch(e){}
+function dirBtn(){dirb.textContent=fwd?'alt \u2192 neu':'neu \u2192 alt';dirb.title=fwd?'Spielt zeitlich vorwaerts (vom aeltesten zum neuesten Foto). Klick: rueckwaerts':'Spielt zeitlich rueckwaerts (vom neuesten zum aeltesten Foto). Klick: vorwaerts';}dirBtn();
+function moreB(){var m=document.getElementById('more');return m?m.getAttribute('data-b'):'';}
+function cntLabel(){var c=document.getElementById('lbshow'),n=document.querySelectorAll('a.zoom').length;if(c)c.innerHTML='&#9654; '+n+(moreB()?'+':'')+' Foto'+(n===1&&!moreB()?'':'s');}
+function loadMore(cb){var b=moreB();if(!b||loading){if(cb)cb();return;}loading=true;
+var p=new URLSearchParams(location.search);p.set('b',b);p.set('frag','1');
+var x=new XMLHttpRequest();x.open('GET','./?'+p.toString());
+x.onload=function(){loading=false;if(x.status===200){var d=document.createElement('div');d.innerHTML=x.responseText;
+var g=document.querySelector('.grid'),m=document.getElementById('more'),f=d.querySelector('#fragmore');
+[].slice.call(d.querySelectorAll('.gc')).forEach(function(c){g.appendChild(c);});
+if(f&&m)m.setAttribute('data-b',f.getAttribute('data-b'));else if(m)m.parentNode.removeChild(m);
+list=anchors();cntLabel();}
+if(cb)cb();};x.onerror=function(){loading=false;if(cb)cb();};x.send();}
+function loadAll(cb){if(moreB()&&!loading)loadMore(function(){loadAll(cb);});else cb();}
 var lbv=document.getElementById('lbv'),dtx=document.getElementById('lbd');
 var bxl=document.getElementById('lbb'),bxb=document.getElementById('lbbx'),fvb=document.getElementById('lbfav'),showBox=true;
 try{showBox=localStorage.getItem('kameraBoxes')!=='0';}catch(e){}
@@ -91,14 +108,20 @@ try{var saved=parseInt(localStorage.getItem('kameraSpeed'),10);if(saved>=100&&sa
 label();
 function delay(){return parseInt(sel.value,10)||800;}
 function schedule(){clearTimeout(timer);if(!playing)return;
-timer=setTimeout(function(){if(pos<list.length-1)show(pos+1);else stop();},delay());}
+timer=setTimeout(function(){var n=fwd?pos-1:pos+1;
+if(n>=0&&n<list.length)show(n);
+else if(!fwd&&moreB()){loadMore(function(){if(playing&&pos<list.length-1)show(pos+1);else stop();});}
+else stop();},delay());}
 function stop(){playing=false;clearTimeout(timer);pb.innerHTML='&#9654;';}
-function play(){if(!list.length)return;playing=true;pb.innerHTML='&#10074;&#10074;';
-if(pos>=list.length-1)show(0);else schedule();}
+function begin(){playing=true;pb.innerHTML='&#10074;&#10074;';
+if(fwd){if(pos<=0)show(list.length-1);else schedule();}
+else{if(pos>=list.length-1)show(0);else schedule();}}
+function play(){if(!list.length)return;
+if(fwd&&moreB()){pb.textContent='\u2026';loadAll(function(){list=anchors();pos=Math.min(pos,list.length-1);begin();});}else begin();}
 function setCap(i,c){var p=c.split('  -  '),title=p[0]||'',w=p.slice(1).join(' - '),m0=w.match(/\\(#\\d+\\)/),id=m0?m0[0]:'';
 w=w.replace(id,'').trim();var m=w.match(/\\d{1,2}:\\d{2}(:\\d{2})?/),tm=m?m[0]:'',dt=m?w.replace(m[0],'').trim():w;
 cap.textContent='';var d1=document.createElement('div'),d2=document.createElement('div');d2.className='ct';
-d1.textContent='Foto '+(i+1)+' von '+list.length+' \u00b7 '+title+(dt?' \u00b7 '+dt:'')+(id?' '+id:'');d2.textContent=tm;
+d1.textContent='Foto '+(fwd?list.length-i:i+1)+' von '+list.length+(moreB()?'+':'')+' \u00b7 '+title+(dt?' \u00b7 '+dt:'')+(id?' '+id:'');d2.textContent=tm;
 cap.appendChild(d1);if(tm)cap.appendChild(d2);}
 function placeDet(){placeBoxes();var t=dtx.getAttribute('data-t')||'';if(!t||Z.s!==1){dtx.style.display='none';return;}
 var r=im.getBoundingClientRect();dtx.textContent=t;dtx.style.left=(r.left+8)+'px';dtx.style.top=(r.top+8)+'px';dtx.style.display='block';}
@@ -122,9 +145,9 @@ setCap(i,a.getAttribute('data-cap')||'');
 prev.disabled=i<=0;next.disabled=i>=list.length-1;
 if(list[i+1]){(new Image()).src=list[i+1].href;}}
 function anchors(){return [].slice.call(document.querySelectorAll('a.zoom'));}
-function open(a){stop();list=anchors();show(list.indexOf(a));lb.style.display='flex';}
-function startShow(){list=anchors().reverse();if(!list.length)return;lb.style.display='flex';pos=0;playing=true;
-pb.innerHTML='&#10074;&#10074;';show(0);}
+function open(a){stop();try{fwd=localStorage.getItem('kameraDir')==='fwd';}catch(e){fwd=false;}dirBtn();list=anchors();show(list.indexOf(a));lb.style.display='flex';}
+function startShow(){fwd=true;dirBtn();pb.textContent='\u2026';lb.style.display='flex';
+loadAll(function(){list=anchors();if(!list.length){close();return;}playing=true;pb.innerHTML='&#10074;&#10074;';show(list.length-1);});}
 function close(){stop();dtx.style.display='none';bxl.style.display='none';lb.style.display='none';im.onload=im.onerror=null;im.src='';}
 function step(d){stop();if(lb.style.display==='flex'&&pos+d>=0&&pos+d<list.length)show(pos+d);}
 document.addEventListener('click',function(ev){
@@ -134,6 +157,8 @@ if(ev.target.closest&&ev.target.closest('#lbshow')){startShow();return;}
 if(ev.target===lb||ev.target.id==='lbx'||ev.target.classList.contains('stage')){close();}
 else if(ev.target===prev){step(-1);}else if(ev.target===next){step(1);}
 else if(ev.target===pb){if(playing)stop();else play();pb.blur();}
+else if(ev.target===dirb){fwd=!fwd;try{localStorage.setItem('kameraDir',fwd?'fwd':'back');}catch(e){}dirBtn();setCap(pos,list[pos].getAttribute('data-cap')||'');schedule();dirb.blur();}
+else if(ev.target.id==='lbmore'){loadMore();}
 else if(ev.target===fvb){toggleFav();fvb.blur();}else if(ev.target===snb){sendNow();snb.blur();}
 else if(ev.target===bxb){showBox=!showBox;try{localStorage.setItem('kameraBoxes',showBox?'1':'0');}catch(e){}boxBtn();placeBoxes();bxb.blur();}});
 sel.addEventListener('input',function(){label();try{localStorage.setItem('kameraSpeed',sel.value);}catch(e){}schedule();});
@@ -401,6 +426,7 @@ document.getElementById('dpok').onclick=function(){
 """
 
 PICKER_CSS = """
+.vsw{display:flex;gap:6px;margin:0 0 10px}.vsw a{padding:3px 10px;border:1px solid var(--line,#8886);border-radius:14px;text-decoration:none;color:inherit;font-size:13px}.vsw a.on{background:var(--accent,#2f6fed);color:#fff;border-color:transparent}
 .dp{display:flex;align-items:center;gap:6px;flex:1 1 100%;margin:0 0 4px}
 .dp button{margin:0;border:0;background:transparent;color:var(--fg);cursor:pointer;font:inherit}
 .dp .dpic{padding:6px;display:flex}
@@ -541,8 +567,7 @@ def det_badge(row):
 
 
 class Board:
-    def __init__(self, cfg, store, runtime, wake, bind, port, allowed, archive=None, detector=None):
-        self.archive = archive
+    def __init__(self, cfg, store, runtime, wake, bind, port, allowed, detector=None):
         self.detector = detector
         self.cfg = cfg
         self.store = store
@@ -636,6 +661,12 @@ class Board:
                                        (query.get("d") or [""])[0] == "1"),
                     extra={"Cache-Control": "no-store"},
                 )
+            if path == "/reviere":
+                return self._send(
+                    req, 200,
+                    self.render_reviere(self._ingress(req) + "/", (query.get("m") or [""])[0]),
+                    extra={"Cache-Control": "no-store"},
+                )
             if path == "/cameras":
                 return self._send(
                     req, 200,
@@ -726,30 +757,45 @@ class Board:
             addresses = form.get("addr", [])
             names = form.get("name", [])
             reviers = form.get("revier", [])
-            saved = 0
-            before = {r["address"]: self.store.label(r["address"]) for r in self.store.cameras()}
+            saved, errors = 0, []
             for i, address in enumerate(addresses):
                 name = names[i] if i < len(names) else ""
                 revier = reviers[i] if i < len(reviers) else ""
-                if self.store.set_camera(address, name, revier):
-                    saved += 1
-            log.info("Kameratabelle im Board gespeichert (%d Eintraege)", saved)
-            if self.archive is not None:
                 try:
-                    for address, old in before.items():
-                        new = self.store.label(address)
-                        if (old["revier"], old["unique"]) != (new["revier"], new["unique"]):
-                            moved = self.archive.relabel(address, new)
-                            if moved:
-                                log.info(
-                                    "Bildordner: %d Mail(s) von %s nach %s/%s umsortiert",
-                                    moved, address, new["revier"], new["unique"],
-                                )
-                    self.archive.export_cameras(self.store.cameras())
-                except OSError as exc:
-                    log.error("Bildordner konnte nicht aktualisiert werden: %r", exc)
+                    if self.store.set_camera(address, name, revier):
+                        saved += 1
+                except CameraError as exc:
+                    errors.append(str(exc))
+            log.info("Kameratabelle im Board gespeichert (%d Eintraege)%s", saved,
+                     ", %d abgelehnt: %s" % (len(errors), "; ".join(errors)) if errors else "")
+            msg = "saved" if not errors else "e:" + " ".join(errors[:3]) + (" Die uebrigen Eintraege wurden gespeichert." if saved else "")
             req.send_response(303)
-            req.send_header("Location", self._ingress(req) + "/cameras?m=saved")
+            req.send_header("Location", self._ingress(req) + "/cameras?m=" + quote(msg, safe=":"))
+            req.send_header("Content-Length", "0")
+            req.end_headers()
+            return
+        if path == "/api/reviere":
+            action = (form.get("action") or [""])[0]
+            name = (form.get("name") or [""])[0]
+            old = (form.get("old") or [""])[0]
+            try:
+                if action == "add":
+                    self.store.add_revier(name)
+                    msg, note = "i:Revier %s angelegt." % name.strip(), "Revier angelegt: %s" % name.strip()
+                elif action == "rename":
+                    self.store.rename_revier(old, name)
+                    msg, note = "i:Revier %s umbenannt in %s." % (old, name.strip()), "Revier umbenannt: %s -> %s" % (old, name.strip())
+                elif action == "delete":
+                    self.store.delete_revier(old)
+                    msg, note = "i:Revier %s geloescht." % old, "Revier geloescht: %s" % old
+                else:
+                    msg, note = "", ""
+                if note:
+                    log.info("Board: %s", note)
+            except CameraError as exc:
+                msg = "e:" + str(exc)
+            req.send_response(303)
+            req.send_header("Location", self._ingress(req) + "/reviere?m=" + quote(msg, safe=":"))
             req.send_header("Content-Length", "0")
             req.end_headers()
             return
@@ -952,7 +998,7 @@ class Board:
         addresses = self._addresses(ctx)
         counts = self.store.counts()
         view_counts = self.store.counts(addresses)
-        rows = self.store.list_rows(flt, 300, addresses)
+        rows = self.store.list_rows(flt, 1000, addresses)
         rt = self.runtime
         cfg = self.cfg
 
@@ -1098,8 +1144,8 @@ class Board:
             "<th>Details</th><th>Aktionen</th></tr></thead><tbody>%s</tbody></table>"
             '<p class="small">Gespeichert wird das Foto mit Status und Empf&auml;ngeradresse, nicht die Mail. '
             "Jedes Foto l&auml;sst sich jederzeit neu senden. Fotos werden nach %s Tagen oder bei vollem "
-            "Speicher (&auml;lteste zuerst) gel&ouml;scht, Favoriten bleiben. Das Bildarchiv (Bildordner) "
-            "bleibt davon unber&uuml;hrt. Hinweis: RevierSpion zeigt als Zeit den Empfang der Mail, ein "
+            "Speicher (&auml;lteste zuerst) gel&ouml;scht, Favoriten bleiben. Hinweis:"
+            " RevierSpion zeigt als Zeit den Empfang der Mail, ein "
             "erneutes Senden erscheint dort mit der Uhrzeit des Nachsendens.</p>"
             "%s</body></html>"
             % (
@@ -1131,21 +1177,20 @@ class Board:
 
     def _nav(self, active):
         new = sum(1 for r in self.store.cameras() if not r["name"] and not r["revier"])
-        return (
-            '<div class="tabs"><a href="./"%s>Bilder</a><a href="mails"%s>Mails</a>'
-            '<a href="auswertung"%s>Auswertung</a><a href="cameras"%s>Kameras%s</a>'
+        on = lambda *keys: ' class="on"' if active in keys else ""
+        nav = (
+            '<div class="tabs"><a href="./"%s>Bilder</a><a href="cameras"%s>Kameras%s</a>'
+            '<a href="reviere"%s>Reviere</a><a href="auswertung"%s>Verbindungen</a>'
             '<a href="models"%s>Modelle</a></div>'
-            % (
-                ' class="on"' if active == "gallery" else "",
-                ' class="on"' if active == "mails" else "",
-                ' class="on"' if active == "eval" else "",
-                ' class="on"' if active == "cameras" else "",
-                " (%d neu)" % new if new else "",
-                ' class="on"' if active == "models" else "",
-            )
+            % (on("gallery", "mails"), on("cameras"), " (%d neu)" % new if new else "", on("reviere"),
+               on("eval"), on("models"))
         )
+        if active in ("gallery", "mails"):
+            nav += ('<div class="vsw"><a href="./"%s>Galerie</a><a href="mails"%s>Liste</a></div>'
+                    % (on("gallery"), on("mails")))
+        return nav
 
-    def _filter_form(self, action, ctx, with_status=False, extra="", timebar="", det=None, fav=None):
+    def _filter_form(self, action, ctx, with_status=False, extra="", timebar="", det=None, fav=None, status=None):
         cam_rows = self.store.cameras()
         reviers = sorted({self._revier_of(x) for x in cam_rows}, key=str.casefold)
         if ctx["r"] and ctx["r"] not in reviers:
@@ -1166,6 +1211,10 @@ class Board:
             det_select = 'Erkennung <select name="e" onchange="this.form.submit()">%s</select>' % "".join(
                 '<option value="%s"%s>%s</option>' % (k, " selected" if k == det else "", e(v))
                 for k, v in DET_OPTIONS)
+        if status is not None:
+            det_select = 'Status <select name="st" onchange="this.form.submit()">%s</select> ' % "".join(
+                '<option value="%s"%s>%s</option>' % (k, " selected" if k == status else "", e(v))
+                for k, v in (("", "Alle"),) + TABS[:1] + TABS[2:]) + det_select
         if fav is not None:
             det_select += (' <label class="favf"><input type="checkbox" name="s" value="1"%s '
                            'onchange="if(this.checked){this.form.z.value=\'\';this.form.von.value=\'\';this.form.bis.value=\'\'}this.form.submit()">'
@@ -1190,8 +1239,11 @@ class Board:
         zeit = one("z") if "z" in query else ("" if one("von") or one("bis") else "heute")
         det = one("e") if one("e") in DET_FILTERS else ""
         fav = one("s") == "1"
-        self._send(req, 200, self.render_gallery(base, ctx["r"], ctx["c"], zeit, one("von"), one("bis"), det, fav),
-                   extra={"Cache-Control": "no-store"})
+        status = one("st") if one("st") in FILTERS and one("st") != "all" else ""
+        before = int(one("b")) if one("b").isdigit() else None
+        body = self.render_gallery(base, ctx["r"], ctx["c"], zeit, one("von"), one("bis"), det, fav,
+                                   status=status, before=before, frag=one("frag") == "1")
+        self._send(req, 200, body, extra={"Cache-Control": "no-store"})
 
     @staticmethod
     def _parse_local(text):
@@ -1363,15 +1415,22 @@ class Board:
             % (e(base), CSS + PICKER_CSS, self._nav("eval"), form, cards, tabs, table, hint)
         )
 
-    def render_gallery(self, base, revier="", camera="", zeit="", von="", bis="", det="", fav=False):
+    GALLERY_PAGE = 1000
+
+    def render_gallery(self, base, revier="", camera="", zeit="", von="", bis="", det="", fav=False,
+                       status="", before=None, frag=False):
         ctx = {"f": "all", "r": revier, "c": camera}
         addresses = self._addresses(ctx)
         preset, start, end = self.time_range(zeit, von, bis)
         since = time.mktime(start.timetuple()) if start else None
         until = time.mktime((end + timedelta(minutes=1)).timetuple()) if end else None
         cams = self.store.camera_map()
+        rows = self.store.gallery_rows(addresses, since=since, until=until, det=det, fav=fav,
+                                       flt=status or "all", before_id=before, limit=self.GALLERY_PAGE + 1)
+        more = len(rows) > self.GALLERY_PAGE
+        rows = rows[:self.GALLERY_PAGE]
         cards = []
-        for r in self.store.gallery_rows(addresses, since=since, until=until, det=det, fav=fav):
+        for r in rows:
             mail_id = r["id"]
             if self.store.preview_path(mail_id):
                 src = "mail/%d/preview" % mail_id
@@ -1391,14 +1450,19 @@ class Board:
                    '<span class="fv">&#9733;</span>' if r["fav"] else "",
                    e(title), det_badge(r) + status_badge(r), e(when))
             )
+        last_id = rows[-1]["id"] if rows else 0
+        if frag:   # Nachladen: nur die Karten plus Marke, ob es noch mehr gibt
+            return "".join(cards) + ('<i id="fragmore" data-b="%d"></i>' % last_id if more else "")
         extra = ""
-        if revier or camera or det or fav or preset != "heute":
+        if revier or camera or det or fav or status or preset != "heute":
             extra = '<a href="./">Filter zur&uuml;cksetzen</a>'
-        count = "%d Foto%s" % (len(cards), "" if len(cards) == 1 else "s")
+        count = "%d%s Foto%s" % (len(cards), "+" if more else "", "" if len(cards) == 1 and not more else "s")
         body = "".join(cards) or (
             '<p class="small">Keine Vorschaubilder in dieser Ansicht. Vorschaubilder entstehen '
             "beim Empfang einer Mail mit Foto.</p>"
         )
+        morebox = ('<p id="more" data-b="%d"><button type="button" id="lbmore">Weitere %d laden</button></p>'
+                   % (last_id, self.GALLERY_PAGE)) if more else ""
         return (
             '<!doctype html><html lang="de"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -1406,9 +1470,10 @@ class Board:
             "<h1>Kamera-Bilder</h1>%s%s"
             '<div class="sticky"><div class="bar">%s<button type="button" class="cnt" id="lbshow"%s '
             'title="Alle Fotos der Auswahl automatisch durchlaufen lassen">&#9654; %s</button></div></div>'
-            '<div class="grid">%s</div>%s</body></html>'
-            % (e(base), CSS + PICKER_CSS, self._nav("gallery"), self._storage_notice(), self._filter_form("./", ctx, extra=extra, timebar=self._timebar(preset, start, end), det=det, fav=fav),
-               "" if cards else " disabled", e(count), body, LIGHTBOX)
+            '<div class="grid">%s</div>%s%s</body></html>'
+            % (e(base), CSS + PICKER_CSS, self._nav("gallery"), self._storage_notice(),
+               self._filter_form("./", ctx, extra=extra, timebar=self._timebar(preset, start, end), det=det, fav=fav, status=status),
+               "" if cards else " disabled", e(count), body, morebox, LIGHTBOX)
         )
 
     # -- Modelle ----------------------------------------------------------
@@ -1676,61 +1741,104 @@ x.onerror=function(){b.disabled=false;s.textContent='Upload fehlgeschlagen (Verb
             % (refresh, e(base), CSS, self._nav("models"), body)
         )
 
+    @staticmethod
+    def _note(message):
+        if message == "saved":
+            return '<div class="info">Gespeichert.</div>'
+        if message.startswith("i:"):
+            return '<div class="info">%s</div>' % e(message[2:])
+        if message.startswith("e:"):
+            return '<div class="banner">&#9888; %s</div>' % e(message[2:])
+        return ""
+
     def render_cameras(self, base, message=""):
         rows = self.store.cameras()
-        reviers = sorted({r["revier"] for r in rows if r["revier"]}, key=str.casefold)
-        options = "".join('<option value="%s">' % e(x) for x in reviers)
+        reviere = [r["name"] for r in self.store.reviere()]
         lines = []
         for r in rows:
             fresh = not r["name"] and not r["revier"]
+            current = r["revier"] or ""
+            opts = '<option value="">(kein Revier)</option>' + "".join(
+                '<option value="%s"%s>%s</option>' % (e(x), " selected" if x.casefold() == current.casefold() else "", e(x))
+                for x in reviere)
+            if current and current.casefold() not in {x.casefold() for x in reviere}:
+                opts += '<option value="%s" selected>%s</option>' % (e(current), e(current))
             lines.append(
                 "<tr%s><td>%s<input type=\"hidden\" name=\"addr\" value=\"%s\">%s</td>"
-                '<td><input name="name" maxlength="80" value="%s" placeholder="Klarname"></td>'
-                '<td><input name="revier" maxlength="80" list="reviere" value="%s" placeholder="Revier"></td>'
-                "<td>%d</td><td>%s</td></tr>"
+                '<td><input name="name" maxlength="80" value="%s" placeholder="%s"></td>'
+                '<td><select name="revier">%s</select></td>'
+                "<td>%s</td></tr>"
                 % (
                     ' class="new"' if fresh else "",
                     e(r["address"]),
                     e(r["address"]),
                     ' <span class="badge amber">neu</span>' if fresh else "",
                     e(r["name"] or ""),
-                    e(r["revier"] or ""),
-                    r["mails"] or 0,
+                    e(placeholder_name(r["address"])) if not r["name"] else "Klarname",
+                    opts,
                     e(fmt_time(r["last_seen"])) if r["last_seen"] else "noch nie",
                 )
             )
-        note = ""
-        if message == "saved":
-            note = '<div class="info">Gespeichert.</div>'
-        archive = (
-            "Die Bilder werden als <code>Revier/Kamera/Datum/</code> abgelegt."
-            if self.cfg.get("archive_enabled")
-            else "Die Bildablage ist aus (Einstellung &bdquo;Bildablage f&uuml;r Analyse&ldquo;)."
-        )
         return (
             '<!doctype html><html lang="de"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
             '<base href="%s"><title>Kameras</title><style>%s'
-            "input{width:100%%;box-sizing:border-box;padding:5px 8px;border-radius:6px;"
+            "input,select{width:100%%;box-sizing:border-box;padding:5px 8px;border-radius:6px;"
             "border:1px solid var(--line,#8886);background:var(--card);color:var(--fg)}"
             "tr.new td{background:#f59e0b22}</style></head><body>"
             "<h1>Kameras</h1>%s%s"
             "<p class=\"small\">Jede Empfangsadresse, von der eine Mail ankommt, wird hier "
-            "automatisch angelegt. Trage Klarname und Revier ein. %s</p>"
-            '<form method="post" action="api/cameras"><datalist id="reviere">%s</datalist>'
+            "automatisch angelegt. Trage den Klarnamen ein und w&auml;hle das Revier (Reviere pflegst du im Reiter "
+            "Reviere). Der Name muss im Revier eindeutig sein. Die Fotos liegen unter "
+            "<code>/share/kamera_relay/&lt;Revier&gt;/&lt;Klarname&gt;/</code>, die Ordner werden beim Speichern angepasst.</p>"
+            '<form method="post" action="api/cameras">'
             "<table><thead><tr><th>Empfangsadresse</th><th>Klarname</th><th>Revier</th>"
-            "<th>Fotos</th><th>Zuletzt</th></tr></thead><tbody>%s</tbody></table>"
+            "<th>Zuletzt</th></tr></thead><tbody>%s</tbody></table>"
             "<p><button>Alles speichern</button></p></form></body></html>"
-            % (e(base), CSS, self._nav("cameras"), note, archive, options, "".join(lines))
+            % (e(base), CSS, self._nav("cameras"), self._note(message), "".join(lines))
+        )
+
+    def render_reviere(self, base, message=""):
+        rows = self.store.reviere()
+        lines = []
+        for r in rows:
+            n = r["cameras"]
+            lines.append(
+                '<tr><td><form method="post" action="api/reviere" class="rv">'
+                '<input type="hidden" name="old" value="%s"><input name="name" maxlength="80" value="%s">'
+                '<button name="action" value="rename">Umbenennen</button></form></td>'
+                "<td>%d</td><td>%s</td></tr>"
+                % (e(r["name"]), e(r["name"]), n,
+                   '<form method="post" action="api/reviere"><input type="hidden" name="old" value="%s">'
+                   '<button name="action" value="delete">L&ouml;schen</button></form>' % e(r["name"]) if not n
+                   else '<span class="small">hat Kameras</span>')
+            )
+        return (
+            '<!doctype html><html lang="de"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<base href="%s"><title>Reviere</title><style>%s'
+            "input{box-sizing:border-box;padding:5px 8px;border-radius:6px;"
+            "border:1px solid var(--line,#8886);background:var(--card);color:var(--fg)}"
+            ".rv{display:flex;gap:6px}.rv input{flex:1}</style></head><body>"
+            "<h1>Reviere</h1>%s%s"
+            "<p class=\"small\">Hier pflegst du die Reviere. Beim Umbenennen wird der Ordner auf dem Share mit umbenannt, "
+            "und die Kameras behalten ihre Zuordnung. Ein Revier l&auml;sst sich nur l&ouml;schen, wenn ihm keine Kamera mehr zugeordnet ist. "
+            "Welche Kamera zu welchem Revier geh&ouml;rt, stellst du im Reiter Kameras ein.</p>"
+            '<form method="post" action="api/reviere" class="rv" style="max-width:420px;margin-bottom:14px">'
+            '<input name="name" maxlength="80" placeholder="Neues Revier"><button name="action" value="add">Anlegen</button></form>'
+            "<table><thead><tr><th>Revier</th><th>Kameras</th><th></th></tr></thead><tbody>%s</tbody></table></body></html>"
+            % (e(base), CSS, self._nav("reviere"), self._note(message), "".join(lines) or
+               '<tr><td colspan="3" class="small">Noch keine Reviere angelegt.</td></tr>')
         )
 
     @staticmethod
     def _tab_statuses(key):
         return {
-            "open": ("failed", "discarded", "throttled", "filtered"),
+            "open": ("failed", "discarded", "throttled", "filtered", "stored"),
             "problems": ("failed", "discarded"),
             "throttled": ("throttled",),
             "filtered": ("filtered",),
+            "stored": ("stored",),
             "queued": ("queued", "sending", "held"),
             "sent": ("sent",),
         }[key]
@@ -1801,7 +1909,7 @@ x.onerror=function(){b.disabled=false;s.textContent='Upload fehlgeschlagen (Verb
             detail += " - Testfilter: wäre nicht weitergeleitet worden"
 
         actions = []
-        if status in ("throttled", "failed", "filtered", "sent", "discarded") and (
+        if status in ("throttled", "failed", "filtered", "stored", "sent", "discarded") and (
                 r["has_file"] or self.store.preview_path(mail_id)):
             actions.append(
                 '<form method="post" action="api/resend/%d">%s<button>Neu senden</button></form>'

@@ -7,6 +7,6 @@ RUN pip install --no-cache-dir aiosmtpd==1.4.6 numpy onnxruntime pillow
 COPY models/megadetector_v6.onnx /app/models/megadetector_v6.onnx
 
 WORKDIR /app
-COPY relay.py store.py board.py archive.py detect.py /app/
+COPY relay.py store.py board.py detect.py /app/
 
 CMD ["python3", "-u", "/app/relay.py"]

@@ -10,7 +10,7 @@ der Kamera mit „OK“. Danach stellt es die Mail an einen Ziel-SMTP-Server zu
 Die Kamera sendet nur und bekommt nie einen Fehler des Zielservers zu sehen.
 
 **Das Foto steht im Mittelpunkt, nicht die Mail:** Gespeichert wird je Alarm das erste
-Foto samt Status (weitergeleitet, gedrosselt, gefiltert, gescheitert), Kamera,
+Foto samt Status (weitergeleitet, gedrosselt, ohne Erkennung, Weiterleitung aus, gescheitert), Kamera,
 Zeit, Bilderkennung und Empfängeradresse. Die Mail selbst wird nur bis zur Zustellung
 gebraucht. Jedes Foto lässt sich jederzeit neu senden, das Add-on baut die Mail dafür
 aus dem Foto und der Empfängeradresse neu zusammen (RevierSpion ordnet nur nach der
@@ -25,17 +25,18 @@ zugestellt. Kommen zu viele Mails einer Kamera, werden sie gedrosselt.
 1. Die Kamera sendet an das Relay (Login, Empfänger-Domain und Größe werden geprüft).
 2. Die Mail wird gespeichert und mit „OK“ bestätigt. Jede Mail bekommt eine Nummer (`#17`).
 3. **Drosselung:** Pro Empfängeradresse (= Kamera) geht in einem Zeitfenster
-   (Standard 5 Minuten) nur die erste Mail durch. Alle weiteren im Fenster werden
+   (Standard 1 Minute) nur die erste Mail durch. Alle weiteren im Fenster werden
    gespeichert und als „gedrosselt“ markiert.
 4. **Zustellung:** Die Mails gehen nacheinander zum Ziel. Zwischen zwei Mails wartet
-   das Relay die eingestellte Wartezeit (Standard 0,8 Sekunden).
+   das Relay die eingestellte Wartezeit (Standard 3 Sekunden).
 5. **Wiederholung:** Klappt es nicht, versucht das Relay es nach 30 Sek, 1, 2, 5 und
    10 Min und danach alle 10 Min, insgesamt bis zu 30 Minuten. Dann gilt die Mail als
    „gescheitert“. Ist das Ziel nicht erreichbar, pausiert die gesamte Zustellung bis
    zum nächsten Versuch.
 6. Nach der Zustellung (oder wenn die Mail gedrosselt, gefiltert oder gescheitert ist)
    wird die Mail-Datei gelöscht. Das Foto bleibt mit seinem Status erhalten
-   (Standard 180 Tage) und lässt sich im Board jederzeit neu senden.
+   (Standard 180 Tage) und lässt sich im Board jederzeit neu senden. Mit
+   „Fotos auf dem Share ablegen“ = aus bleiben nur die nicht weitergeleiteten Fotos erhalten.
 
 Endgültige Ablehnungen des Ziels (zum Beispiel „Empfänger unbekannt“) werden nicht
 wiederholt, die Mail gilt sofort als gescheitert.
@@ -47,7 +48,7 @@ Das Board „Kamera-Mails“ ist nur nach dem Login in Home Assistant erreichbar
 
 - Zustand des Ziels, wartende, gedrosselte und gescheiterte Mails
 - ein Warnbanner, wenn Mails länger als 15 Minuten auf die Zustellung warten
-- im Reiter „Mails“ standardmäßig nur, was **nicht weitergeleitet** wurde (gescheitert, gedrosselt, gefiltert), mit Kamera, Status, Fehlergrund und Vorschaubild; „Alle“ zeigt auch zugestellte Fotos
+- in der Listenansicht des Reiters „Bilder“ standardmäßig nur, was **nicht weitergeleitet** wurde (gescheitert, gedrosselt, ohne Erkennung, Weiterleitung aus), mit Kamera, Status, Fehlergrund und Vorschaubild; „Alle“ zeigt auch zugestellte Fotos
 - **Neu senden** (einzeln, auch bei zugestellten Fotos, oder alle gescheiterten), Download des Fotos als Datei, Löschen
 - einen Hinweis, **sobald der Speicher voll ist** (dann werden die ältesten Fotos automatisch gelöscht)
 
@@ -67,92 +68,108 @@ Unter „Optional: Backup-SMTP: …“ kannst du einen zweiten Zielserver eintra
 - Beim Start wird auch der Backup-Server getestet („Backup-Zieltest OK“).
 - Ist der Backup-Server leer, ändert sich nichts gegenüber früher.
 
+## Reiter im Board
+
+**Bilder | Kameras | Reviere | Verbindungen | Modelle**
+
+- **Bilder** (Startseite): alle Fotos als Galerie, oder per Umschalter **Liste** mit Status, Fehlergrund, Mehrfachauswahl, Löschen und „Neu senden“.
+- **Kameras:** Klarname und Revier je Empfangsadresse.
+- **Reviere:** Pflegeliste der Reviere (anlegen, umbenennen, löschen).
+- **Verbindungen:** jede Verbindung einer Kamera zum Relay (bisher „Auswertung“).
+- **Modelle:** Modell der Bilderkennung.
+
 ## Bilderseite (erster Reiter)
 
 **Zeitraum:** Oben auf der Seite sitzt eine Datumsauswahl wie im Energie-Dashboard von Home Assistant. Beim Öffnen der Seite ist „Heute“ eingestellt. Ein Klick auf das Kalender-Symbol oder den Text öffnet ein Fenster mit den Voreinstellungen („Alle Bilder“, „Heute“, „Gestern“, „Diese Woche“, „Dieser Monat“, „Dieses Quartal“, „Dieses Jahr“, „Letzte 7 Tage“, „Letzte 30 Tage“, „Letzte 365 Tage“, „Letzte 12 Monate“) und einem Kalender. Für einen eigenen Zeitraum tippst du zuerst den Starttag und dann den Endtag an (ein einzelner Tag genügt) und bestätigst mit „Auswählen“. Unter dem Kalender kannst du optional die Uhrzeit von/bis einstellen (Standard 00:00 bis 23:59). Die Pfeile daneben schieben den Zeitraum um dessen Länge vor und zurück (Monat → Vormonat, Woche → Vorwoche), „Jetzt“ springt zurück auf die aktuelle Woche, den aktuellen Monat usw. Die Voreinstellungen werden bei jedem Aufruf neu berechnet. Popup, Vor/Zurück und Diashow laufen nur über die gefilterten Bilder.
 
-Der erste Reiter **Bilder** zeigt alle Vorschaubilder als Kacheln, ähnlich wie RevierSpion: Bild, Revier und Klarname der Kamera, Datum und Uhrzeit des Empfangs. Oben filterst du nach **Revier** und **Kamera**. Ein Klick auf ein Bild öffnet es groß als Popup, mit Pfeilen, Pfeiltasten oder Wischen blätterst du durch alle Bilder der aktuellen Filterung. Es erscheinen die neuesten 1000 Fotos, auch von gedrosselten Mails. Ohne Mails oder ohne Foto gibt es keine Kachel. Weiterleitungsstatus, Empfangsadresse und Löschen findest du im Reiter **Mails**.
+Der erste Reiter **Bilder** zeigt alle Vorschaubilder als Kacheln, ähnlich wie RevierSpion: Bild, Revier und Klarname der Kamera, Datum und Uhrzeit des Empfangs. Oben filterst du nach **Revier** und **Kamera**. Ein Klick auf ein Bild öffnet es groß als Popup, mit Pfeilen, Pfeiltasten oder Wischen blätterst du durch alle Bilder der aktuellen Filterung. Das Feld **Status** filtert nach Weiterleitungsstatus (Standard: alle). Es erscheinen 1000 Fotos je Seite, die neuesten zuerst. Gibt es mehr, lädt „Weitere 1000 laden“ die nächsten nach, und die Vorschau läuft nahtlos weiter. Ohne Foto gibt es keine Kachel. Empfangsadresse, Mehrfachauswahl und Löschen findest du in der **Liste** (Umschalter unter den Reitern).
 
-**Diashow:** Der grüne Knopf mit der Anzahl der Fotos („▶ 6 Fotos") spielt die gefilterten Fotos automatisch ab, vom ältesten zum neuesten. Im Popup stellst du mit dem Regler **Tempo** die Anzeigedauer pro Foto ein (0,1 bis 3 Sekunden, Standard 0,8 s; der Wert wird im Browser gemerkt). ▶/❚❚ oder die Leertaste starten und pausieren, die Pfeile blättern von Hand weiter, am Ende hält die Show an.
+**Diashow:** Der grüne Knopf mit der Anzahl der Fotos („▶ 6 Fotos") spielt die gefilterten Fotos automatisch ab, vom ältesten zum neuesten. Im Popup wählst du mit dem Knopf **neu → alt / alt → neu** die **Abspielrichtung** (der Wert wird im Browser gemerkt, der grüne Knopf startet immer beim ältesten Foto). Im Popup stellst du mit dem Regler **Tempo** die Anzeigedauer pro Foto ein (0,1 bis 3 Sekunden, Standard 0,8 s; der Wert wird im Browser gemerkt). ▶/❚❚ oder die Leertaste starten und pausieren, die Pfeile blättern von Hand weiter, am Ende hält die Show an.
 
 **Zoomen:** Im Popup kannst du Fotos mit zwei Fingern aufziehen (Pinch), mit einem Finger verschieben und per Doppeltipp rein- bzw. rauszoomen (am Rechner: Mausrad, Doppelklick, Ziehen). Gewischt wird zum Blättern nur, solange das Foto nicht vergrößert ist; beim Wechsel des Fotos wird der Zoom zurückgesetzt.
 
 ## Board: Vorschau, Filter und Löschen
 
 - **Vorschau**: Jede Mail mit Foto zeigt ein Vorschaubild, auch nach der Zustellung. Ein Klick öffnet es als Popup. Mit den Pfeilen (oder den Pfeiltasten, am Handy Wischen) blätterst du durch alle Bilder der aktuellen Ansicht, `Esc` schließt. Die Vorschau ist das erste Foto der Mail (nur Fotos bis 6 MB, Videos haben keine bleibende Vorschau).
-- **Filter**: Zusätzlich zum Status (Alle, Probleme, Gedrosselt, …) lässt sich nach **Revier** und nach **einzelner Kamera** filtern. Das Blättern im Popup folgt dem Filter. Angezeigt werden die neuesten 300 Mails der Ansicht.
+- **Filter**: Zusätzlich zum Status (Alle, Probleme, Gedrosselt, …) lässt sich nach **Revier** und nach **einzelner Kamera** filtern. Das Blättern im Popup folgt dem Filter. Angezeigt werden die neuesten 1000 Mails der Ansicht.
 - **Löschen**: pro Mail über „Löschen", mehrere über die Häkchen und „Ausgewählte löschen", oder „Alle in dieser Ansicht löschen" (nur die Treffer des aktuellen Status- und Kamerafilters). Mails, die noch auf die Zustellung warten, werden nie gelöscht.
-- **Automatisch**: Fotos samt Status werden nach der eingestellten Aufbewahrung (Standard 180 Tage) gelöscht. Ist das Speicherlimit voll (Standard 5120 MB), wird das jeweils älteste Foto gelöscht (FIFO), Favoriten und noch wartende Mails bleiben. Der Hinweis im Board erscheint nur, wenn der Speicher voll ist. Der Bildordner (Bildablage) ist davon unabhängig.
+- **Automatisch**: Fotos samt Status werden nach der eingestellten Aufbewahrung (Standard 180 Tage) gelöscht. Ist das Speicherlimit voll (Standard 1024 MB = 1 GB), wird das jeweils älteste Foto gelöscht (FIFO), Favoriten und noch wartende Mails bleiben. Der Hinweis im Board erscheint nur, wenn der Speicher voll ist.
 - **Neu senden im Popup:** Oben im großen Bild steht neben dem Stern der Knopf „Neu senden“ (bei nicht weitergeleiteten Fotos mit dem Status in Klammern).
 
-## Kameras und Bildablage
+## Kameras
 
 **Vorbelegung (optional):** Wer viele Kameras auf einmal benennen will, legt die Datei `/share/kamera_relay/kameras_vorbelegung.json` an, Inhalt: `[["adresse@revierspion.de", "Klarname", "Revier"], ...]`. Beim Start werden daraus nur Kameras ergänzt, die noch nicht in der Tabelle stehen. Änderungen im Board bleiben erhalten.
 
 **Kameratabelle:** Im Board gibt es den Reiter „Kameras“. Jede Empfangsadresse, von der
 jemals eine Mail ankam, wird dort automatisch angelegt (neue stehen oben, markiert mit „neu“).
-Du trägst nur **Klarname** und **Revier** ein und klickst „Alles speichern“. Neue Kameras
-meldet das Protokoll mit „Neue Kamera erkannt“.
+Du trägst **Klarname** ein und wählst das **Revier** aus der Liste, dann „Alles speichern“.
+Der Klarname muss **im Revier eindeutig** sein, sonst lehnt das Board ab und nennt die Kamera, die ihn schon trägt.
+Neue Kameras meldet das Protokoll mit „Neue Kamera erkannt“ und tragen vorläufig den Namen `Neu-<Adressteil>`.
 
-**Bildablage:** Mit „Bildablage für Analyse“ = an legt das Relay die Fotos **jeder**
-angenommenen Mail zusätzlich ab, auch die gedrosselten, die nicht weitergeleitet werden:
+**Reviere:** Im Reiter „Reviere“ pflegst du die Liste (anlegen, umbenennen, löschen). Ein Revier lässt sich nur löschen, wenn ihm keine Kamera mehr zugeordnet ist. Bestehende Revier-Einträge aus älteren Ständen und aus der Vorbelegung werden beim Start automatisch übernommen.
+
+**Ordner auf dem Share:** Mit „Fotos auf dem Share ablegen“ = an liegen die Fotos unter
 
 ```
-/share/kamera_bilder/<Revier>/<Kamera>/<JJJJ-MM-TT>/<Revier>_<Kamera>_<JJJJ-MM-TT>_<HH-MM-SS>.jpg
-/share/kamera_bilder/<Revier>/<Kamera>/<JJJJ-MM-TT>/<Revier>_<Kamera>_<JJJJ-MM-TT>_<HH-MM-SS>.json
+/share/kamera_relay/<Revier>/<Klarname>/<JJJJ-MM-TT>_<HH-MM-SS>_<Nr>.jpg
 ```
 
-Mehrere Fotos in einer Mail bekommen `_1`, `_2`. Umlaute werden für Dateinamen umgeschrieben
-(Pließalm → Pliessalm). Die `.json` enthält Empfangsadresse, Klarname, Revier, Empfangszeit,
-Betreff, den Anfang des Mailtexts und ob die Mail gedrosselt wurde. Im Ordner liegt außerdem
-`kameras.json` mit der ganzen Kameratabelle.
-
-**Noch nicht benannte Kameras:** Ihre Bilder landen unter `Unbenannt/<Empfangsadresse>/`.
-Sobald du Klarname und Revier speicherst, sortiert das Relay die bereits abgelegten Bilder
-automatisch in den neuen Ordner um und benennt sie neu. Gleiche Klarnamen im selben Revier
-bekommen den Adressteil angehängt, damit nichts vermischt wird.
-
-Zwei Grenzen halten den Ordner klein: Tagesordner älter als „Bildablage: Aufbewahrung“
-(Standard 30 Tage) werden stündlich gelöscht, und ist das „Bildablage: Speicherlimit“
-(Standard 10 GB) erreicht, werden die ältesten Bilder zuerst gelöscht (first in, first out),
-jeweils eine ganze Mail. Die Weiterleitung ist davon unabhängig: Scheitert die Ablage, wird
-die Mail trotzdem zugestellt. Der Ordner ist über das Samba-Add-on im Netzwerk erreichbar
-(Freigabe „share“, Ordner `kamera_bilder`).
+Kameras ohne Revier liegen unter `Ohne Revier`. Benennst du eine Kamera um oder ordnest sie einem anderen Revier zu, wird ihr Ordner umbenannt bzw. verschoben, und beim Umbenennen eines Reviers der Revier-Ordner. Die Zuordnung steht in der Datenbank, benenne oder verschiebe die Ordner deshalb nicht von Hand: Das Board findet verschobene Fotos nicht mehr. Fotos, die du von Hand löschst, sind weg. Lässt sich der Share nicht beschreiben, bleibt das Foto intern erhalten, die Weiterleitung läuft immer weiter.
 
 ## Konfiguration
 
-**Relay am Home Assistant**
+Home Assistant kennt keine Abschnitte in der Add-on-Konfiguration. Die Einstellungen sind
+deshalb nummeriert und stehen in dieser Reihenfolge: 1 Funktionen, 2 Relay, 3 Ziel-SMTP, 4 Backup-SMTP,
+5 Zustellung, 6 Fotospeicher, 7 Bilderkennung.
+
+**1 Funktionen (ganz oben)**
+
+| Schalter | Standard | Bedeutung |
+|---|---|---|
+| Fotos auf dem Share ablegen | an | Alle Fotos liegen unter `/share/kamera_relay/<Revier>/<Kamera>/`. Aus = reines Relay: nur Fotos, die nicht weitergeleitet wurden (gedrosselt, gescheitert, ohne Erkennung, Weiterleitung aus), bleiben intern erhalten und sind im Board neu sendbar. Weitergeleitete Fotos werden gelöscht |
+| Fotos an das Ziel weiterleiten | an | Aus = nichts wird weitergeleitet, alle Fotos werden nur gespeichert (Status „Weiterleitung aus“) und lassen sich einzeln neu senden |
+| Bilderkennung | an | Markiert jedes Foto als Mensch, Tier, Fahrzeug oder leer |
+| Nur Fotos mit Erkennung weiterleiten | aus | Fotos ohne Erkennung werden nicht weitergeleitet, sondern gespeichert. Wirkt nur bei aktiver Bilderkennung und Weiterleitung |
+
+**2 Relay (am Home Assistant)**
 
 | Parameter | Bedeutung |
 |---|---|
-| Relay: Port | Port, auf dem das Relay zuhört (am Router weiterleiten) |
+| Relay: Port | **Pflichtfeld, kein Standard.** Frei wählbar (z. B. 20023, besser über 1024, viele Provider sperren Port 25). Am Router von außen weiterleiten und in jeder Kamera als SMTP-Port eintragen |
 | Relay: Benutzer | Login der Kameras (= Absenderadresse, mit @) |
 | Relay: Passwort | Passwort der Kameras (mindestens 12 Zeichen) |
 
-**Ziel-SMTP-Server** (voreingestellt für RevierSpion)
+**2 Ziel-SMTP** (voreingestellt für RevierSpion)
 
 | Parameter | Voreinstellung |
 |---|---|
-| Ziel: SMTP-Server | smtp.revierspion.de |
-| Ziel: Benutzername | revierspion |
-| Ziel: Passwort | leer, muss eingetragen werden (liegt nur in deiner Konfiguration, nicht im Add-on) |
-| Ziel: Port | 25 |
-| Ziel: Erlaubte Empfänger-Domains | revierspion.de |
-| Ziel: Absender | leer (Absender der Kamera wird unverändert weitergegeben) |
+| Server | smtp.revierspion.de |
+| Port | 25 |
+| Benutzername | revierspion |
+| Passwort | leer, muss eingetragen werden (liegt nur in deiner Konfiguration, nicht im Add-on) |
+| Erlaubte Empfänger-Domains | revierspion.de |
+| Absender | leer (Absender der Kamera wird unverändert weitergegeben) |
 
-Bei Ziel-Port 465 verbindet sich das Relay automatisch mit SSL/TLS zum Ziel.
+Die Verschlüsselung zum Ziel wird automatisch gewählt: SSL/TLS bei Port 465, STARTTLS bei 587, sonst unverschlüsselt. Ein nicht prüfbares Zertifikat des Ziels wird mit Warnung im Protokoll akzeptiert.
 
-**Tempo und Drosselung**
+**4 Backup-SMTP** (optional, leer = kein Backup): Server, Port (587), Benutzer, Passwort, Absender.
+
+**5 Zustellung**
 
 | Parameter | Standard | Bedeutung |
 |---|---|---|
-| Drosselung pro Kamera (Minuten) | 5 | Höchstens eine Mail pro Kamera in diesem Zeitraum, 0 = aus |
+| Drosselung pro Kamera (Minuten) | 1 | Höchstens ein Foto pro Kamera in diesem Zeitraum, 0 = aus |
 | Wartezeit zwischen zwei Mails (Sekunden) | 3 | Pause zwischen zwei Mails zum Ziel |
+| Wiederholen bei Fehlern (Minuten) | 30 | Danach gilt die Mail als gescheitert |
 
-**Weitere Einstellungen** sind optional und standardmäßig ausgeblendet („Nicht
-verwendete optionale Konfigurationsoptionen anzeigen“): Wiederholen bei Fehlern
-(30 Minuten), Aufbewahrung (180 Tage), Speicherlimit (5120 MB), Verschlüsselung
-erzwingen, Verschlüsselung für ältere Kameras (Standard an), Zertifikat, SSL/TLS und STARTTLS zum Ziel, maximale Mailgröße.
+**6 Fotospeicher**
+
+| Parameter | Standard | Bedeutung |
+|---|---|---|
+| Aufbewahrung (Tage) | 180 | Gilt für alle Fotos, auch gedrosselte, gescheiterte und nicht erkannte. Favoriten bleiben |
+| Speicherlimit (MB) | 1024 | Ist er voll, wird das älteste Foto gelöscht (FIFO), das Board zeigt einen Hinweis |
+
+**7 Bilderkennung:** 1 Thread, Schwellen Tier 25 %, Mensch 30 %, Auto/Fahrzeug 30 %.
 
 **Zwischenserver (GMX, Gmail, Brevo):** Bei „Ziel: Erlaubte Empfänger-Domains“ muss
 weiterhin `revierspion.de` stehen, sonst lehnt das Relay die Mails der Kameras ab.
@@ -203,15 +220,14 @@ Jede Mail hat eine Nummer. So lässt sich der ganze Weg einer Mail verfolgen:
 
 ## Verschlüsselung
 
-Liegt unter `/ssl/fullchain.pem` und `/ssl/privkey.pem` ein Zertifikat (z. B. vom
-Duck-DNS-Add-on), wird es automatisch verwendet und nach einer Erneuerung
-selbstständig neu geladen. Damit die Kamera das Zertifikat akzeptiert, muss als
-SMTP-Server der Name eingetragen sein, auf den das Zertifikat lautet.
+Auf der Kameraseite nimmt das Relay Verbindungen **so kompatibel wie möglich** an:
+unverschlüsselt, mit STARTTLS und mit SSL/TLS, auch mit alten TLS-Versionen (ab 1.0) für
+ältere Kamera-Firmware. Dafür gibt es keine Einstellungen.
 
-Standardmäßig akzeptiert das Relay auf der Kameraseite auch alte TLS-Versionen (ab 1.0),
-weil ältere Kamera-Firmware nichts Neueres spricht. Das ist besser als unverschlüsselt.
-Mit „Verschlüsselung für ältere Kameras“ = aus gilt nur TLS ab 1.2. Die Verbindung zum
-Ziel-Server ist immer modern verschlüsselt.
+Liegt unter `/ssl/fullchain.pem` und `/ssl/privkey.pem` ein Zertifikat (z. B. vom
+Duck-DNS-Add-on), wird es automatisch verwendet und nach einer Erneuerung selbstständig
+neu geladen. Damit die Kamera es akzeptiert, muss als SMTP-Server der Name eingetragen
+sein, auf den das Zertifikat lautet. Ohne Zertifikat läuft das Relay unverschlüsselt.
 
 ## Schutz
 
@@ -227,7 +243,7 @@ Im Protokoll steht bei jeder angenommenen und weitergeleiteten Mail der Klarname
 
 Beim Verbindungsaufbau (Zeilen „Verbindung von …“, „fordert STARTTLS an“, „Login ok von …“) ist die Kamera noch nicht bekannt, weil die Empfängeradresse erst danach kommt. Dort steht deshalb der Hinweis „vermutlich <Kamera>“. Er stammt von der Kamera, die zuletzt von derselben IP-Adresse gesendet hat. Teilen sich mehrere Kameras eine IP-Adresse (Mobilfunk), steht „eine von: …“. Ist die IP neu, gibt es keinen Hinweis. Die endgültige Zuordnung steht in der Zeile „angenommen von …“.
 
-## Reiter „Auswertung“
+## Reiter „Verbindungen“ (früher „Auswertung“)
 
 Hier steht jede Verbindung einer Kamera zum Relay, auch Test-Mails und Fehler: Datum und Uhrzeit, Klarname der Kamera, Status und Einzelheiten (IP-Adresse, Verschlüsselung, Dauer, Größe, Betreff). Gefiltert wird nach Revier, Kamera und Zeitraum (Standard: letzte 7 Tage) und nach „Alle“, „Probleme“, „Tests“ oder „Mails mit Foto/Video“.
 
@@ -250,19 +266,18 @@ Jedes Foto einer Mail wird lokal auf dem Gerät mit dem Wildtier-Modell MegaDete
 - **Tier** (jedes Wild, Vögel, Katze, Hund u. a.), **Mensch**, **Fahrzeug** oder **leer** (nichts erkannt, möglicher Fehlalarm).
 - Es stehen **alle** erkannten Klassen nebeneinander, z. B. „Mensch 88 %, Fahrzeug 93 %". Bei mehreren Fotos zählt je Klasse der beste Wert, geprüft werden bis zu 6 Fotos je Mail.
 - Links oben im Bild steht der Kurztext mit der Sicherheit, z. B. „Tier 87 %". Er ist nur eine Einblendung im Board, das Foto selbst und die weitergeleitete Mail bleiben unverändert.
-- Im Reiter „Bilder" filtert das Feld **Erkennung** zusätzlich zu Revier, Kamera und Zeitraum (z. B. alle Kameras mit „leer“ oder Revier Tauchendorf mit „Tier“) (irgendeine Erkennung, mit Tier, mit Mensch, mit Fahrzeug, leer, noch nicht geprüft). „Mit Mensch" zeigt jede Mail, in der ein Mensch erkannt wurde, auch wenn zusätzlich ein Fahrzeug oder Tier dabei ist; es wird immer ein Etikett ausgewählt. In „Mails" zeigt ein Etikett das Ergebnis.
+- Im Reiter „Bilder" filtert das Feld **Erkennung** zusätzlich zu Revier, Kamera und Zeitraum (z. B. alle Kameras mit „leer“ oder Revier Tauchendorf mit „Tier“) (irgendeine Erkennung, mit Tier, mit Mensch, mit Fahrzeug, leer, noch nicht geprüft). „Mit Mensch" zeigt jede Mail, in der ein Mensch erkannt wurde, auch wenn zusätzlich ein Fahrzeug oder Tier dabei ist; es wird immer ein Etikett ausgewählt. In der Liste zeigt ein Etikett das Ergebnis.
 - Im großen Bild (Klick aufs Foto) werden die erkannten Mensch, Tier und Fahrzeug mit farbigem Rahmen, Klasse und Prozent eingezeichnet (Mensch orange, Tier grün, Fahrzeug blau). Der Knopf **Rahmen** unten blendet sie ein oder aus. Rahmen gibt es nur für das angezeigte erste Foto der Mail. Die Rahmen sind eine Orientierung: dicht stehende Tiere werden teils zu einem Rahmen zusammengefasst, genau gezählt wird nicht.
 - **Rechenlast:** Nur während ein Foto geprüft wird (etwa 1 bis 2 s mit dem Standard von 1 Kern), sonst nichts. Eine Mail mit mehreren Fotos belegt die CPU für ein paar Sekunden. Dazu kommen rund 400 MB Arbeitsspeicher, solange die Erkennung an ist.
 - **Standardmäßig wird alles weitergeleitet.** Die Erkennung markiert nur. Optional kann der Filter (siehe unten) Mails ohne Erkennung zurückhalten.
 
 **Grenzen:** Eine Artbestimmung (Reh, Wildschwein …) gibt es nicht, nur Tier, Mensch und Fahrzeug. Sehr kleine, verdeckte oder stark angeschnittene Tiere und Spinnweben vor der Linse können trotzdem durchrutschen. „Leer" heißt deshalb nur „das Modell hat nichts gefunden", nicht „sicher ein Fehlalarm".
 
-**Einstellungen:** *Bilderkennung* (ganz oben in der Konfiguration, Standard an; zum Ausschalten abhaken und das Add-on neu starten) und optional *Threads* (Standard 1; so viele CPU-Kerne nutzt die Erkennung höchstens, sie läuft immer mit niedrigster Priorität, Home Assistant hat Vorrang) sowie drei Schwellen in % (*Schwelle Tier* Standard 25, *Schwelle Mensch* Standard 30, *Schwelle Fahrzeug* Standard 50; niedriger findet mehr, auch mehr Falsches). Beim Start werden die letzten 300 Mails nachträglich geprüft, die noch nicht oder mit einem älteren Modell geprüft wurden (nach einem Modellwechsel werden alte Ergebnisse also neu berechnet; bei bereits zugestellten Mails wird nur das aufbewahrte Vorschaubild, also das erste Foto, geprüft; ist auch das nicht mehr da, bleibt das alte Ergebnis).
+**Einstellungen:** *Bilderkennung* (Gruppe 1 Funktionen, Standard an; zum Ausschalten abhaken und das Add-on neu starten) und optional *Threads* (Standard 1; so viele CPU-Kerne nutzt die Erkennung höchstens, sie läuft immer mit niedrigster Priorität, Home Assistant hat Vorrang) sowie drei Schwellen in % (*Schwelle Tier* Standard 25, *Schwelle Mensch* Standard 30, *Schwelle Fahrzeug* Standard 30; niedriger findet mehr, auch mehr Falsches). Beim Start werden die letzten 300 Mails nachträglich geprüft, die noch nicht oder mit einem älteren Modell geprüft wurden (nach einem Modellwechsel werden alte Ergebnisse also neu berechnet; bei bereits zugestellten Mails wird nur das aufbewahrte Vorschaubild, also das erste Foto, geprüft; ist auch das nicht mehr da, bleibt das alte Ergebnis).
 
-**Filter: nur Mails mit Erkennung weiterleiten** (Einstellung *Filter*, Standard *aus*):
-- **aus:** alles wird weitergeleitet.
-- **test:** alles wird weitergeleitet. Im Board steht bei zugestellten Mails ohne Erkennung der Vermerk „Testfilter: wäre nicht weitergeleitet worden". Mit dem Feld *Erkennung* = „leer" und dem Reiter „Zugestellt" siehst du, was der Filter gestoppt hätte. So lässt sich prüfen, ob dabei echte Tiere wären.
-- **an:** Mails mit Foto warten kurz (etwa 1 bis 2 Sekunden) auf die Erkennung. Wurde nichts erkannt, wird die Mail **nicht** weitergeleitet, sondern als Foto mit Status „ohne Erkennung“ gespeichert (Reiter „Mails“, dort mit „Neu senden“). Sie zählt nicht für die Drosselung der Kamera.
+**Nur Fotos mit Erkennung weiterleiten** (Schalter in Gruppe 1, Standard aus):
+- **aus:** alles wird weitergeleitet, die Erkennung markiert nur. Mit dem Feld *Erkennung* = „leer“ im Reiter „Bilder“ siehst du vorab, was der Filter stoppen würde.
+- **an:** Mails mit Foto warten kurz (etwa 1 bis 2 Sekunden) auf die Erkennung. Wurde nichts erkannt, wird die Mail **nicht** weitergeleitet, sondern als Foto mit Status „ohne Erkennung“ gespeichert (Liste, dort mit „Neu senden“). Sie zählt nicht für die Drosselung der Kamera.
 - **Sicherheitsnetz:** Mails ohne Foto, Mails mit nicht auswertbaren Fotos und Mails, bei denen die Erkennung ausfällt oder länger als 2 Minuten braucht, werden immer weitergeleitet. Ist die Bilderkennung aus oder das Modell nicht ladbar, wirkt der Filter nicht.
 - Fotos ohne Erkennung bleiben so lange gespeichert wie alle anderen (Aufbewahrung laut Einstellung).
 
