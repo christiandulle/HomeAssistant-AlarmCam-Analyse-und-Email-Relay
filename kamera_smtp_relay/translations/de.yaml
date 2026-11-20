@@ -1,0 +1,106 @@
+configuration:
+  detect_enabled:
+    name: "Bilderkennung (Tier / Mensch / Fahrzeug / leer)"
+    description: Standard an. Jedes Foto wird lokal auf dem Gerät geprüft und als Mensch, Tier, Fahrzeug oder leer markiert. Es wird weiterhin alles weitergeleitet, die Erkennung markiert nur.
+  detect_filter:
+    name: "Filter: nur Mails mit Erkennung weiterleiten"
+    description: "aus (Standard): alles weiterleiten. test: alles weiterleiten, das Board zeigt aber, welche Mails der Filter gestoppt hätte. an: Mails, auf deren Fotos nichts erkannt wurde, werden nicht weitergeleitet, sondern im Board gespeichert (Reiter „Mails“, dort erneut sendbar)."
+  relay_port:
+    name: "Relay: Port"
+    description: Port, auf dem das Relay am Home Assistant zuhört. Diesen Port am Router weiterleiten.
+  relay_user:
+    name: "Relay: Benutzer"
+    description: Wird in allen Kameras als Absenderadresse eingetragen und dient als Login. Reolink verlangt eine Adresse mit @, z. B. kamera@meinedomain.at.
+  relay_password:
+    name: "Relay: Passwort"
+    description: Frei wählbar, mindestens 12 Zeichen. Wird in allen Kameras als Passwort eingetragen.
+  target_host:
+    name: "Ziel: SMTP-Server"
+    description: Server, an den jede Mail weitergereicht wird.
+  target_user:
+    name: "Ziel: Benutzername"
+  target_password:
+    name: "Ziel: Passwort"
+  target_port:
+    name: "Ziel: Port"
+    description: Bei Port 465 wird automatisch mit SSL/TLS verbunden.
+  throttle_minutes:
+    name: "Drosselung pro Kamera (Minuten)"
+    description: Pro Empfängeradresse wird höchstens eine Mail in diesem Zeitraum weitergeleitet (Standard 5). Weitere Mails werden gespeichert und sind im Board erneut sendbar. 0 = keine Drosselung.
+  send_delay_seconds:
+    name: "Wartezeit zwischen zwei Mails (Sekunden)"
+    description: So lange wartet das Relay nach jeder zugestellten Mail, bevor die nächste zum Ziel geht (Standard 3). Schützt vor Sperren durch den Ziel-Anbieter.
+  archive_enabled:
+    name: "Bildablage für Analyse"
+    description: Aus = nur Weiterleitung. An = zusätzlich werden die Fotos jeder Mail (auch gedrosselte) unter /share/kamera_bilder/<Revier>/<Kamera>/<Datum>/ abgelegt, mit einer .json-Datei pro Mail. Die Weiterleitung läuft unverändert.
+  archive_days:
+    name: "Bildablage: Aufbewahrung (Tage)"
+    description: Ältere Tagesordner werden automatisch gelöscht (Standard 30).
+  archive_max_mb:
+    name: "Bildablage: Speicherlimit (MB)"
+    description: Maximaler Platz für den Bildordner (Standard 10240 = 10 GB). Ist er voll, werden die ältesten Bilder zuerst gelöscht (first in, first out).
+  archive_videos:
+    name: "Optional: Bildablage auch für Videos"
+    description: Standard aus. Videos brauchen viel Platz.
+  detect_threads:
+    name: "Optional: Bilderkennung Threads"
+    description: Wie viele CPU-Kerne die Erkennung höchstens nutzt (Standard 1, höchstens 4). Mehr Threads erkennen schneller, belasten Home Assistant aber stärker. Die Erkennung läuft immer mit der niedrigsten Priorität.
+  detect_threshold_tier:
+    name: "Optional: Bilderkennung Schwelle Tier (%)"
+    description: Ab dieser Sicherheit zählt ein Tier (Standard 25). Niedriger findet mehr, auch mehr Falsches.
+  detect_threshold_mensch:
+    name: "Optional: Bilderkennung Schwelle Mensch (%)"
+    description: Ab dieser Sicherheit zählt ein Mensch (Standard 30).
+  detect_threshold_fahrzeug:
+    name: "Optional: Bilderkennung Schwelle Fahrzeug (%)"
+    description: Ab dieser Sicherheit zählt ein Fahrzeug (Standard 50, höher, weil Wild und Schatten leicht als Fahrzeug erscheinen).
+  retry_minutes:
+    name: "Optional: Wiederholen bei Fehlern (Minuten)"
+    description: So lange versucht das Relay eine Mail zuzustellen, bevor sie als gescheitert gilt (Standard 30). Gescheiterte Mails bleiben im Board zum erneuten Senden.
+  retention_days:
+    name: "Optional: Aufbewahrung (Tage)"
+    description: So lange bleiben Fotos samt Status im Board gespeichert, danach werden sie automatisch gelöscht (Standard 180). Jedes Foto kann in dieser Zeit erneut gesendet werden. Favoriten bleiben immer erhalten.
+  storage_mb:
+    name: "Optional: Speicherlimit (MB)"
+    description: Maximaler Platz für gespeicherte Fotos (Standard 5120). Ist er voll, wird das jeweils älteste Foto gelöscht (Favoriten bleiben). Das Board zeigt dann einen Hinweis.
+  allowed_domains:
+    name: "Ziel: Erlaubte Empfänger-Domains"
+    description: Domain der Empfängeradressen der Kameras, z. B. revierspion.de. Mehrere mit Komma trennen. Mails an andere Domains werden abgelehnt. Bei einem Zwischenserver wie GMX oder Gmail muss hier trotzdem revierspion.de stehen.
+  require_tls:
+    name: "Optional: Verschlüsselung erzwingen"
+    description: Wenn aktiv, werden unverschlüsselte Logins der Kameras abgelehnt.
+  tls_compat:
+    name: "Optional: Verschlüsselung für ältere Kameras"
+    description: Standard ist an. Erlaubt auch alte TLS-Versionen (ab 1.0), wie sie ältere Kamera-Firmware spricht. Besser als unverschlüsselt. Aus = nur TLS ab 1.2. Die Verbindung zum Ziel-Server ist davon nicht betroffen.
+  certfile:
+    name: "Optional: Zertifikat"
+    description: Standard ist /ssl/fullchain.pem.
+  keyfile:
+    name: "Optional: Privater Schlüssel"
+    description: Standard ist /ssl/privkey.pem.
+  target_ssl:
+    name: "Optional: SSL/TLS zum Ziel"
+    description: Nicht gesetzt = automatisch (an bei Ziel-Port 465, sonst aus).
+  target_starttls:
+    name: "Optional: Verschlüsselung zum Ziel (STARTTLS)"
+  target_sender:
+    name: "Ziel: Absender"
+    description: Leer lassen = der Absender der Kamera wird unverändert weitergegeben (z. B. bei RevierSpion direkt). Bei GMX, Gmail & Co. hier die Adresse des Kontos eintragen. Dann wird auch der From-Kopf der Mail ersetzt, die Kamera-Adresse bleibt als Reply-To erhalten. Gilt für den Hauptserver, beim Backup-Server nur, wenn dort kein eigener Absender eingetragen ist.
+  backup_host:
+    name: "Optional: Backup-SMTP: Server"
+    description: Optional. Zweiter Zielserver, z. B. smtp-relay.brevo.com. Schlägt eine Zustellung beim Hauptserver fehl, geht der nächste Versuch sofort über diesen Server. Leer lassen = kein Backup.
+  backup_port:
+    name: "Optional: Backup-SMTP: Port"
+    description: 587 (mit STARTTLS, Standard) oder 465 (SSL/TLS). Die Verschlüsselung wird automatisch gewählt.
+  backup_user:
+    name: "Optional: Backup-SMTP: Benutzer"
+    description: Anmeldename beim Backup-Server (bei Brevo die Login-Adresse des SMTP-Zugangs).
+  backup_password:
+    name: "Optional: Backup-SMTP: Passwort"
+    description: Passwort beim Backup-Server (bei Brevo der SMTP-Schlüssel, nicht das Kontopasswort).
+  backup_sender:
+    name: "Optional: Backup-SMTP: Absender"
+    description: 'Optional. Absenderadresse beim Backup-Server (bei Brevo eine dort bestätigte Adresse). Leer lassen = derselbe Absender wie bei "Ziel: Absender".'
+  max_message_mb:
+    name: "Optional: Maximale Mailgröße (MB)"
+    description: Standard ist 25.
