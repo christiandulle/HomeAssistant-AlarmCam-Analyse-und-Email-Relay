@@ -81,10 +81,12 @@ function moreB(){var m=document.getElementById('more');return m?m.getAttribute('
 function cntLabel(){var c=document.getElementById('lbshow'),n=document.querySelectorAll('a.zoom').length;if(c)c.innerHTML='&#9654; '+n+(moreB()?'+':'')+' Foto'+(n===1&&!moreB()?'':'s');}
 function loadMore(cb){var b=moreB();if(!b||loading){if(cb)cb();return;}loading=true;
 var p=new URLSearchParams(location.search);p.set('b',b);p.set('frag','1');
-var x=new XMLHttpRequest();x.open('GET','./?'+p.toString());
-x.onload=function(){loading=false;if(x.status===200){var d=document.createElement('div');d.innerHTML=x.responseText;
-var g=document.querySelector('.grid'),m=document.getElementById('more'),f=d.querySelector('#fragmore');
-[].slice.call(d.querySelectorAll('.gc')).forEach(function(c){g.appendChild(c);});
+var isG=!!document.querySelector('.grid');
+var x=new XMLHttpRequest();x.open('GET',(isG?'./':'mails')+'?'+p.toString());
+x.onload=function(){loading=false;if(x.status===200){var d=document.createElement('div');
+d.innerHTML=isG?x.responseText:'<table><tbody>'+x.responseText+'</tbody></table>';
+var g=document.querySelector('.grid')||document.querySelector('tbody'),m=document.getElementById('more'),f=d.querySelector('#fragmore');
+[].slice.call(d.querySelectorAll(isG?'.gc':'tr')).forEach(function(c){g.appendChild(c);});
 if(f&&m)m.setAttribute('data-b',f.getAttribute('data-b'));else if(m)m.parentNode.removeChild(m);
 list=anchors();cntLabel();}
 if(cb)cb();};x.onerror=function(){loading=false;if(cb)cb();};x.send();}
@@ -216,6 +218,7 @@ return confirm(n+' ausgew\\u00e4hlte Mail(s) l\\u00f6schen?');};
 """
 
 CSS = """
+.vsw{display:flex;gap:6px;margin:0 0 10px}.vsw a{padding:3px 10px;border:1px solid var(--line,#8886);border-radius:14px;text-decoration:none;color:inherit;font-size:13px}.vsw a.on{background:var(--accent,#2f6fed);color:#fff;border-color:transparent}
 :root{color-scheme:light dark;--bg:#fff;--fg:#1c1c1e;--mut:#6b7280;--line:#e5e7eb;--card:#f6f7f9}
 @media(prefers-color-scheme:dark){:root{--bg:#1b1b1f;--fg:#e8e8ea;--mut:#9ca3af;--line:#33343a;--card:#25262b}}
 body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
@@ -426,7 +429,6 @@ document.getElementById('dpok').onclick=function(){
 """
 
 PICKER_CSS = """
-.vsw{display:flex;gap:6px;margin:0 0 10px}.vsw a{padding:3px 10px;border:1px solid var(--line,#8886);border-radius:14px;text-decoration:none;color:inherit;font-size:13px}.vsw a.on{background:var(--accent,#2f6fed);color:#fff;border-color:transparent}
 .dp{display:flex;align-items:center;gap:6px;flex:1 1 100%;margin:0 0 4px}
 .dp button{margin:0;border:0;background:transparent;color:var(--fg);cursor:pointer;font:inherit}
 .dp .dpic{padding:6px;display:flex}
@@ -698,16 +700,26 @@ class Board:
     @staticmethod
     def _ctx(source):
         """Status-Reiter, Revier und Kamera aus Formular oder Adresszeile."""
-        flt = (source.get("f") or ["open"])[0]
+        flt = (source.get("f") or [(source.get("st") or ["open"])[0] or "open"])[0]
         return {
             "f": flt if flt in dict(TABS) else "open",
             "r": (source.get("r") or [""])[0][:80],
             "c": (source.get("c") or [""])[0][:200],
+            "z": (source.get("z") or [""])[0][:40],
+            "von": (source.get("von") or [""])[0][:40],
+            "bis": (source.get("bis") or [""])[0][:40],
         }
+
+    def _range(self, ctx):
+        """(Voreinstellung, Start, Ende, since, until) der gemeinsamen Zeitauswahl."""
+        preset, start, end = self.time_range(ctx.get("z", ""), ctx.get("von", ""), ctx.get("bis", ""))
+        since = time.mktime(start.timetuple()) if start else None
+        until = time.mktime((end + timedelta(minutes=1)).timetuple()) if end else None
+        return preset, start, end, since, until
 
     @staticmethod
     def _qs(ctx, **extra):
-        items = [("f", ctx["f"])] + [(k, ctx[k]) for k in ("r", "c") if ctx[k]]
+        items = [("f", ctx["f"])] + [(k, ctx.get(k, "")) for k in ("r", "c", "z", "von", "bis") if ctx.get(k)]
         items += [(k, v) for k, v in extra.items() if v]
         return "mails?" + "&".join("%s=%s" % (k, quote(str(v), safe="")) for k, v in items)
 
@@ -715,8 +727,8 @@ class Board:
     def _hidden(ctx):
         return "".join(
             '<input type="hidden" name="%s" value="%s">' % (k, e(ctx[k]))
-            for k in ("f", "r", "c")
-            if ctx[k] or k == "f"
+            for k in ("f", "r", "c", "z", "von", "bis")
+            if ctx.get(k) or k == "f"
         )
 
     @staticmethod
@@ -829,7 +841,8 @@ class Board:
         ctx = self._ctx(form)
         if path == "/api/delete-bulk":
             if (form.get("mode") or [""])[0] == "all":
-                ids = self.store.matching_ids(ctx["f"], self._addresses(ctx))
+                _p, _s, _e, since, until = self._range(ctx)
+                ids = self.store.matching_ids(ctx["f"], self._addresses(ctx), since=since, until=until)
             else:
                 ids = [int(x) for x in form.get("ids", []) if x.isdigit()]
             done = self.store.delete_many(ids)
@@ -966,7 +979,11 @@ class Board:
     def _page(self, req, query):
         ctx = self._ctx(query)
         base = self._ingress(req) + "/"
-        body = self.render(ctx["f"], base, (query.get("m") or [""])[0], ctx["r"], ctx["c"])
+        before = (query.get("b") or [""])[0]
+        body = self.render(ctx["f"], base, (query.get("m") or [""])[0], ctx["r"], ctx["c"],
+                           zeit=ctx["z"], von=ctx["von"], bis=ctx["bis"],
+                           before=int(before) if before.isdigit() else None,
+                           frag=(query.get("frag") or [""])[0] == "1")
         self._send(req, 200, body, extra={"Cache-Control": "no-store"})
 
     def _message(self, code):
@@ -992,13 +1009,22 @@ class Board:
             "Favoriten bleiben. Speicherlimit oder Aufbewahrung in den Einstellungen anpassen."
             % (fmt_size(info["used"]), fmt_size(info["cap"])))
 
-    def render(self, flt, base, message="", revier="", camera=""):
+    LIST_PAGE = 500
+
+    def render(self, flt, base, message="", revier="", camera="", zeit="", von="", bis="", before=None, frag=False):
         now = time.time()
-        ctx = {"f": flt, "r": revier, "c": camera}
+        ctx = {"f": flt, "r": revier, "c": camera, "z": zeit, "von": von, "bis": bis}
         addresses = self._addresses(ctx)
+        preset, start, end, since, until = self._range(ctx)
         counts = self.store.counts()
-        view_counts = self.store.counts(addresses)
-        rows = self.store.list_rows(flt, 1000, addresses)
+        view_counts = self.store.counts(addresses, since, until)
+        rows = self.store.list_rows(flt, self.LIST_PAGE + 1, addresses, since=since, until=until, before_id=before)
+        more = len(rows) > self.LIST_PAGE
+        rows = rows[:self.LIST_PAGE]
+        if frag:   # Nachladen: nur die Zeilen plus Marke
+            cams_f = self.store.camera_map()
+            return "".join(self._row(r, ctx, time.time(), cams_f) for r in rows) + (
+                '<i id="fragmore" data-b="%d"></i>' % rows[-1]["id"] if more and rows else "")
         rt = self.runtime
         cfg = self.cfg
 
@@ -1101,25 +1127,27 @@ class Board:
             cam_opts += '<option value="%s"%s>%s</option>' % (
                 e(x["address"]), " selected" if x["address"] == camera else "", e(title))
         filter_bar = (
-            '<form class="filters" method="get" action="mails"><input type="hidden" name="f" value="%s">'
+            '<form class="filters" method="get" action="mails"><input type="hidden" name="f" value="%s">%s'
             "Revier <select name=\"r\" onchange=\"this.form.c.value='';this.form.submit()\">%s</select>"
             'Kamera <select name="c" onchange="this.form.submit()">%s</select>'
             "<button>Filtern</button>%s</form>"
             % (
-                e(flt), revier_opts, cam_opts,
+                e(flt), self._timebar(preset, start, end), revier_opts, cam_opts,
                 '<a href="%s">Filter zur&uuml;cksetzen</a>' % e(self._qs({"f": flt, "r": "", "c": ""}))
-                if revier or camera else "",
+                if revier or camera or preset else "",
             )
         )
-        deletable = len(self.store.matching_ids(flt, addresses))
+        deletable = len(self.store.matching_ids(flt, addresses, since=since, until=until))
         total = (
             sum(view_counts.values())
             if flt == "all"
             else sum(view_counts.get(s, 0) for s in self._tab_statuses(flt))
         )
         shown = ""
-        if total > len(rows):
+        if more:
             shown = '<span class="small">Angezeigt werden die neuesten %d von %d Mails.</span> ' % (len(rows), total)
+        morebox = ('<p id="more" data-b="%d"><button type="button" id="lbmore">Weitere %d laden</button></p>'
+                   % (rows[-1]["id"], self.LIST_PAGE)) if more and rows else ""
         bulk = (
             '<form id="bulk" class="bulk" method="post" action="api/delete-bulk">%s%s'
             '<button type="submit" name="mode" value="selected" class="danger" '
@@ -1141,7 +1169,7 @@ class Board:
             '<div class="tabs">%s</div>%s%s%s'
             '<table><thead><tr><th><input type="checkbox" id="selall" title="alle auswählen"></th>'
             "<th>Empfang</th><th>Kamera</th><th>Inhalt</th><th>Status</th>"
-            "<th>Details</th><th>Aktionen</th></tr></thead><tbody>%s</tbody></table>"
+            "<th>Details</th><th>Aktionen</th></tr></thead><tbody>%s</tbody></table>%s"
             '<p class="small">Gespeichert wird das Foto mit Status und Empf&auml;ngeradresse, nicht die Mail. '
             "Jedes Foto l&auml;sst sich jederzeit neu senden. Fotos werden nach %s Tagen oder bei vollem "
             "Speicher (&auml;lteste zuerst) gel&ouml;scht, Favoriten bleiben. Hinweis:"
@@ -1150,8 +1178,8 @@ class Board:
             "%s</body></html>"
             % (
                 e(base),
-                CSS,
-                self._nav("mails"),
+                CSS + PICKER_CSS,
+                self._nav("mails", {"r": revier, "c": camera, "z": zeit, "von": von, "bis": bis, "st": flt}),
                 "".join(notices),
                 card_html,
                 e(self.cfg["retention_days"]),
@@ -1162,6 +1190,7 @@ class Board:
                 filter_bar,
                 bulk,
                 body_rows,
+                morebox,
                 e(self.cfg["retention_days"]),
                 LIGHTBOX,
             )
@@ -1175,7 +1204,7 @@ class Board:
             return "<b>%s</b><div class=\"small\">%s</div>" % (e(title), e(address))
         return e(address)
 
-    def _nav(self, active):
+    def _nav(self, active, sel=None):
         new = sum(1 for r in self.store.cameras() if not r["name"] and not r["revier"])
         on = lambda *keys: ' class="on"' if active in keys else ""
         nav = (
@@ -1186,8 +1215,14 @@ class Board:
                on("eval"), on("models"))
         )
         if active in ("gallery", "mails"):
-            nav += ('<div class="vsw"><a href="./"%s>Galerie</a><a href="mails"%s>Liste</a></div>'
-                    % (on("gallery"), on("mails")))
+            sel = sel or {}
+            common = [(k, sel.get(k, "")) for k in ("r", "c", "z", "von", "bis") if sel.get(k)]
+            st = sel.get("st", "")
+            gal = common + ([("st", st)] if st and st != "open" else [])
+            lst = common + ([("f", st)] if st else [])
+            q = lambda items: "?" + "&".join("%s=%s" % (k, quote(str(v), safe="")) for k, v in items) if items else ""
+            nav += ('<div class="vsw"><a href="./%s"%s>Galerie</a><a href="mails%s"%s>Liste</a></div>'
+                    % (e(q(gal)), on("gallery"), e(q(lst)), on("mails")))
         return nav
 
     def _filter_form(self, action, ctx, with_status=False, extra="", timebar="", det=None, fav=None, status=None):
@@ -1235,8 +1270,7 @@ class Board:
         ctx = self._ctx(query)
         base = self._ingress(req) + "/"
         one = lambda k: (query.get(k) or [""])[0][:40]
-        # ohne Angabe startet die Seite mit "Heute"; "Alle Bilder" ist z= (leer)
-        zeit = one("z") if "z" in query else ("" if one("von") or one("bis") else "heute")
+        zeit = one("z")   # ohne Angabe: alle Bilder
         det = one("e") if one("e") in DET_FILTERS else ""
         fav = one("s") == "1"
         status = one("st") if one("st") in FILTERS and one("st") != "all" else ""
@@ -1415,7 +1449,7 @@ class Board:
             % (e(base), CSS + PICKER_CSS, self._nav("eval"), form, cards, tabs, table, hint)
         )
 
-    GALLERY_PAGE = 1000
+    GALLERY_PAGE = 500
 
     def render_gallery(self, base, revier="", camera="", zeit="", von="", bis="", det="", fav=False,
                        status="", before=None, frag=False):
@@ -1454,7 +1488,7 @@ class Board:
         if frag:   # Nachladen: nur die Karten plus Marke, ob es noch mehr gibt
             return "".join(cards) + ('<i id="fragmore" data-b="%d"></i>' % last_id if more else "")
         extra = ""
-        if revier or camera or det or fav or status or preset != "heute":
+        if revier or camera or det or fav or status or preset != "":
             extra = '<a href="./">Filter zur&uuml;cksetzen</a>'
         count = "%d%s Foto%s" % (len(cards), "+" if more else "", "" if len(cards) == 1 and not more else "s")
         body = "".join(cards) or (
@@ -1471,7 +1505,9 @@ class Board:
             '<div class="sticky"><div class="bar">%s<button type="button" class="cnt" id="lbshow"%s '
             'title="Alle Fotos der Auswahl automatisch durchlaufen lassen">&#9654; %s</button></div></div>'
             '<div class="grid">%s</div>%s%s</body></html>'
-            % (e(base), CSS + PICKER_CSS, self._nav("gallery"), self._storage_notice(),
+            % (e(base), CSS + PICKER_CSS,
+               self._nav("gallery", {"r": revier, "c": camera, "z": zeit, "von": von, "bis": bis, "st": status}),
+               self._storage_notice(),
                self._filter_form("./", ctx, extra=extra, timebar=self._timebar(preset, start, end), det=det, fav=fav, status=status),
                "" if cards else " disabled", e(count), body, morebox, LIGHTBOX)
         )

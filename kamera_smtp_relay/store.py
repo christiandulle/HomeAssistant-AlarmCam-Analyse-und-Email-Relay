@@ -1010,8 +1010,11 @@ class Store:
                 args.extend(addresses)
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
 
-    def list_rows(self, flt="all", limit=1000, addresses=None, det=""):
-        where, args = self._where(flt, addresses, det=det)
+    def list_rows(self, flt="all", limit=500, addresses=None, det="", since=None, until=None, before_id=None):
+        where, args = self._where(flt, addresses, since, until, det)
+        if before_id:
+            where += (" AND" if where else " WHERE") + " id<?"
+            args = (*args, int(before_id))
         return self._query("SELECT * FROM mails%s ORDER BY id DESC LIMIT ?" % where, (*args, limit))
 
     def gallery_rows(self, addresses=None, scan=5000, limit=1000, since=None, until=None, det="", fav=False,
@@ -1132,14 +1135,14 @@ class Store:
             n += 1
         return n
 
-    def matching_ids(self, flt="all", addresses=None, deletable_only=True):
-        where, args = self._where(flt, addresses)
+    def matching_ids(self, flt="all", addresses=None, deletable_only=True, since=None, until=None):
+        where, args = self._where(flt, addresses, since, until)
         if deletable_only:
             where += (" AND" if where else " WHERE") + " fav=0 AND status NOT IN ('queued','sending','held')"
         return [r["id"] for r in self._query("SELECT id FROM mails%s" % where, args)]
 
-    def counts(self, addresses=None):
-        where, args = self._where("all", addresses)
+    def counts(self, addresses=None, since=None, until=None):
+        where, args = self._where("all", addresses, since, until)
         rows = self._query("SELECT status, COUNT(*) AS n FROM mails%s GROUP BY status" % where, args)
         return {r["status"]: r["n"] for r in rows}
 

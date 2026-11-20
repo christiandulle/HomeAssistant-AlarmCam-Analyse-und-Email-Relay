@@ -62,10 +62,10 @@ configuration:
     description: So lange versucht das Relay eine Mail zuzustellen, bevor sie als gescheitert gilt (Standard 30). Gescheiterte Fotos bleiben im Board zum erneuten Senden.
   retention_days:
     name: "6 Fotospeicher: Aufbewahrung (Tage)"
-    description: So lange bleiben alle Fotos samt Status im Board gespeichert, auch gedrosselte, gescheiterte und nicht erkannte (Standard 180). Danach werden sie automatisch gelöscht. Favoriten bleiben immer erhalten.
+    description: So lange bleiben die Fotos samt Status gespeichert, auf dem Share (bei ausgeschalteter Fotoablage intern im Add-on), auch gedrosselte, gescheiterte und nicht erkannte (Standard 180). Danach werden sie automatisch gelöscht. Favoriten bleiben immer erhalten.
   storage_mb:
     name: "6 Fotospeicher: Speicherlimit (MB)"
-    description: Maximaler Platz für die Fotos im Board (Standard 1024 = 1 GB). Ist er voll, wird das jeweils älteste Foto gelöscht (Favoriten bleiben) und das Board zeigt einen Hinweis.
+    description: Maximaler Platz für alle gespeicherten Fotos, auf dem Share bzw. intern bei ausgeschalteter Fotoablage (Standard 1024 = 1 GB). Ist er voll, wird das jeweils älteste Foto gelöscht (Favoriten bleiben) und das Board zeigt einen Hinweis.
   detect_threads:
     name: "7 Bilderkennung: Threads"
     description: Wie viele CPU-Kerne die Erkennung höchstens nutzt (Standard 1, höchstens 4). Mehr Threads erkennen schneller, belasten Home Assistant aber stärker. Die Erkennung läuft immer mit der niedrigsten Priorität.
