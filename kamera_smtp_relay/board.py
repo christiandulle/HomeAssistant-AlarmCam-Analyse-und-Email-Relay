@@ -94,11 +94,11 @@ function loadAll(cb){if(moreB()&&!loading)loadMore(function(){loadAll(cb);});els
 var lbv=document.getElementById('lbv'),dtx=document.getElementById('lbd');
 var bxl=document.getElementById('lbb'),bxb=document.getElementById('lbbx'),fvb=document.getElementById('lbfav'),showBox=true;
 try{showBox=localStorage.getItem('kameraBoxes')!=='0';}catch(e){}
-var BC={mensch:'#f5a524',tier:'#5fd068',fahrzeug:'#4aa3ff'},BN={mensch:'Mensch',tier:'Tier',fahrzeug:'Fahrzeug'};
+var BC={mensch:'#c07a1a',tier:'#3f8f4a',fahrzeug:'#3a7bbf'},BN={mensch:'Mensch',tier:'Tier',fahrzeug:'Fahrzeug'};
 function boxBtn(){bxb.style.opacity=showBox?'1':'.45';}boxBtn();
 function boxHtml(t,test){var h='';(t||'').split(';').forEach(function(p){var a=p.split(':');if(a.length<6)return;
 var x1=+a[2],y1=+a[3],x2=+a[4],y2=+a[5],c=BC[a[0]]||'#fff';
-h+='<div style="position:absolute;left:'+(x1*100)+'%;top:'+(y1*100)+'%;width:'+((x2-x1)*100)+'%;height:'+((y2-y1)*100)+'%;border:2px '+(test?'dashed':'solid')+' '+c+';box-sizing:border-box"><span style="position:absolute;left:-2px;'+(test?'bottom':'top')+':-20px;background:'+c+';color:#000;font-size:12px;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap">'+(test?'Test ':'')+(BN[a[0]]||a[0])+' '+Math.round(+a[1]*100)+' %</span></div>';});return h;}
+h+='<div style="position:absolute;left:'+(x1*100)+'%;top:'+(y1*100)+'%;width:'+((x2-x1)*100)+'%;height:'+((y2-y1)*100)+'%;border:1px '+(test?'dashed':'solid')+' '+c+';box-sizing:border-box"><span style="position:absolute;left:-1px;'+(test?'bottom':'top')+':-20px;background:'+c+';color:#fff;font-size:12px;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap">'+(test?'Test ':'')+(BN[a[0]]||a[0])+' '+Math.round(+a[1]*100)+' %</span></div>';});return h;}
 function placeBoxes(){var t=bxl.getAttribute('data-b')||'',tt=bxl.getAttribute('data-tb')||'';
 if((!t&&!tt)||!showBox){bxl.style.display='none';return;}
 var r=im.getBoundingClientRect();if(!r.width){bxl.style.display='none';return;}
@@ -214,6 +214,21 @@ var n=document.querySelectorAll('input.sel:checked').length;
 if(!n){alert('Bitte zuerst Mails mit H\\u00e4kchen ausw\\u00e4hlen.');return false;}
 return confirm(n+' ausgew\\u00e4hlte Mail(s) l\\u00f6schen?');};
 })();
+(function(){var t=document.getElementById('topid');if(!t||!(document.querySelector('.grid')||document.querySelector('table')))return;
+var top=t.getAttribute('data-t'),box=null,isG=!!document.querySelector('.grid'),busy=false;
+function popup(){var l=document.getElementById('lb');return l&&l.style.display==='flex';}
+function typing(){var a=document.activeElement;return a&&/INPUT|SELECT|TEXTAREA/.test(a.tagName)||!!document.querySelector('input[name=ids]:checked');}
+function check(){if(document.hidden||busy||popup())return;busy=true;
+var p=new URLSearchParams(location.search);p.set('na',top);
+var x=new XMLHttpRequest();x.open('GET',(isG?'./':'mails')+'?'+p.toString());
+x.onload=function(){busy=false;if(x.status!==200)return;var n=0;try{n=JSON.parse(x.responseText).n||0;}catch(e){}
+if(!n)return;
+if((window.scrollY||0)<80&&!typing()){location.reload();return;}
+if(!box){box=document.createElement('div');box.style.cssText='position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#2563eb;color:#fff;padding:8px 16px;border-radius:20px;cursor:pointer;z-index:50;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+box.onclick=function(){location.reload();};document.body.appendChild(box);}
+box.textContent=n+(n>=100?'+':'')+(n===1?' neues Foto':' neue Fotos')+' – anzeigen';};
+x.onerror=function(){busy=false;};x.send();}
+setInterval(check,30000);})();
 </script>
 """
 
@@ -294,7 +309,7 @@ padding:6px 16px;font-size:16px;cursor:pointer;margin:0}
 #lb .ctl .lbl{font-size:13px;min-width:2.6em}
 #lb .cap{padding:0 16px 6px;font-size:18px;font-weight:600;line-height:1.3;text-align:center;width:100%;box-sizing:border-box}
 #lb .cap div:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#lb .cap .ct{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
+#lb .cap .ct{color:#4fa65b;font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2}
 @media(max-width:700px){#lbd{font-size:12px}#lb .ctl{gap:6px;padding:6px 4px 0}#lb .ctl button{padding:6px 12px}#lb .ctl input[type=range]{width:24vw}#lb .ctl .lbl{min-width:0;font-size:12px}#lb .cap{font-size:14px;padding:0 10px 6px}#lb .cap .ct{font-size:24px}}
 """
 
@@ -980,10 +995,19 @@ class Board:
         ctx = self._ctx(query)
         base = self._ingress(req) + "/"
         before = (query.get("b") or [""])[0]
+        na = (query.get("na") or [""])[0]
+        if na.isdigit():
+            _p, _s, _e, since, until = self._range(ctx)
+            rows = self.store.list_rows(ctx["f"], 100, self._addresses(ctx), since=since, until=until)
+            return self._send(req, 200, json.dumps({"n": sum(1 for r in rows if r["id"] > int(na))}),
+                              "application/json", {"Cache-Control": "no-store"})
+        top = self.store.max_id()
         body = self.render(ctx["f"], base, (query.get("m") or [""])[0], ctx["r"], ctx["c"],
                            zeit=ctx["z"], von=ctx["von"], bis=ctx["bis"],
                            before=int(before) if before.isdigit() else None,
                            frag=(query.get("frag") or [""])[0] == "1")
+        if (query.get("frag") or [""])[0] != "1":
+            body = body.replace("</body>", '<i id="topid" data-t="%d" hidden></i></body>' % top, 1)
         self._send(req, 200, body, extra={"Cache-Control": "no-store"})
 
     def _message(self, code):
@@ -1162,8 +1186,8 @@ class Board:
         return (
             '<!doctype html><html lang="de"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<base href="%s"><title>Kamera-Mails</title><style>%s</style></head><body>'
-            "<h1>Kamera-Mails</h1>%s%s"
+            '<base href="%s"><title>AlarmCam</title><style>%s</style></head><body>'
+            "<h1>AlarmCam</h1>%s%s"
             '<div class="cards">%s</div>'
             '<div class="small">Aufbewahrung: %s Tage, Speicher: %s von %s</div>'
             '<div class="tabs">%s</div>%s%s%s'
@@ -1275,8 +1299,17 @@ class Board:
         fav = one("s") == "1"
         status = one("st") if one("st") in FILTERS and one("st") != "all" else ""
         before = int(one("b")) if one("b").isdigit() else None
+        if one("na").isdigit():
+            _p, _s, _e, since, until = self._range({"z": zeit, "von": one("von"), "bis": one("bis")})
+            rows = self.store.gallery_rows(self._addresses(ctx), since=since, until=until, det=det, fav=fav,
+                                           flt=status or "all", limit=100)
+            return self._send(req, 200, json.dumps({"n": sum(1 for r in rows if r["id"] > int(one("na")))}),
+                              "application/json", {"Cache-Control": "no-store"})
+        top = self.store.max_id()
         body = self.render_gallery(base, ctx["r"], ctx["c"], zeit, one("von"), one("bis"), det, fav,
                                    status=status, before=before, frag=one("frag") == "1")
+        if one("frag") != "1":
+            body = body.replace("</body>", '<i id="topid" data-t="%d" hidden></i></body>' % top, 1)
         self._send(req, 200, body, extra={"Cache-Control": "no-store"})
 
     @staticmethod

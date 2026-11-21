@@ -44,7 +44,7 @@ wiederholt, die Mail gilt sofort als gescheitert.
 ## Board in der Seitenleiste
 
 Auf der Info-Seite des Add-ons gibt es den Schalter **„In der Seitenleiste anzeigen“**.
-Das Board „Kamera-Mails“ ist nur nach dem Login in Home Assistant erreichbar und zeigt:
+Das Board „AlarmCam“ ist nur nach dem Login in Home Assistant erreichbar und zeigt:
 
 - Zustand des Ziels, wartende, gedrosselte und gescheiterte Mails
 - ein Warnbanner, wenn Mails länger als 15 Minuten auf die Zustellung warten

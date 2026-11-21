@@ -1,5 +1,5 @@
 name: "AlarmCam Analyse und Mail-Relay"
-version: "1.1.1"
+version: "1.1.2"
 slug: "kamera_smtp_relay"
 description: "Zentrale Alarmmail-Verwaltung für Kameras mit Bildanalyse und selektiver Weiterleitung."
 arch:
@@ -12,7 +12,7 @@ host_network: true
 ingress: true
 ingress_port: 8099
 panel_icon: "mdi:email-fast-outline"
-panel_title: "Kamera-Mails"
+panel_title: "AlarmCam"
 map:
   - type: ssl
     read_only: true

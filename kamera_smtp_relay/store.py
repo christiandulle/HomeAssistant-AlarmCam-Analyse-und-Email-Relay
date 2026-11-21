@@ -698,9 +698,9 @@ class Store:
                     "INSERT OR IGNORE INTO cameras (address, name, revier) VALUES (?,?,?)",
                     (address, self._clean(name), revier),
                 )
-                if revier:
-                    self.db.execute("INSERT OR IGNORE INTO reviere (name) VALUES (?)", (revier,))
-                if cur.rowcount:
+                if cur.rowcount:   # Revier nur anlegen, wenn die Kamera neu ist (sonst kehren geloeschte Reviere zurueck)
+                    if revier:
+                        self.db.execute("INSERT OR IGNORE INTO reviere (name) VALUES (?)", (revier,))
                     self._ensure_folder(address)
             self.db.commit()
 
@@ -1009,6 +1009,10 @@ class Store:
                 clauses.append("camera IN (%s)" % ",".join("?" * len(addresses)))
                 args.extend(addresses)
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
+
+    def max_id(self):
+        rows = self._query("SELECT MAX(id) AS m FROM mails")
+        return (rows[0]["m"] if rows else 0) or 0
 
     def list_rows(self, flt="all", limit=500, addresses=None, det="", since=None, until=None, before_id=None):
         where, args = self._where(flt, addresses, since, until, det)

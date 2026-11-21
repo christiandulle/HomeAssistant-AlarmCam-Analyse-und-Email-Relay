@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.2
+
+- Bilder und Liste aktualisieren sich selbst: alle 30 Sekunden Prüfung auf neue Fotos (nur bei sichtbarem Reiter und geschlossenem Popup); ganz oben lädt die Seite neu, sonst erscheint „N neue Fotos – anzeigen“
+- Erkennungsrahmen im Popup: 1 px und gedeckte Farben (Tier dunkelgrün, Mensch Orange, Fahrzeug Blau)
+- Uhrzeit im Popup in Grün hervorgehoben
+- Fehlerbehebung: Gelöschte Reviere kehrten nach jedem Start aus der Kamera-Vorbelegung zurück; Reviere aus der Vorbelegung entstehen nur noch mit einer neu angelegten Kamera
+- Das Board heißt jetzt „AlarmCam“ (vorher „Kamera-Mails“)
+
 ## 1.1.1
 
 - Liste: Umschalter Galerie/Liste wieder als Knöpfe dargestellt (Darstellungsfehler)
