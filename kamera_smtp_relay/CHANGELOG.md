@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3
+
+- Modelle: Leistungsmessung. Reiter „Modelle“ zeigt je Modell (Produktiv, Test) die Zeit pro Foto (Mittel und längste), die Thread-Zahl, den Arbeitsspeicher (Zuwachs beim Laden und Spitze) und eine Hochrechnung der Rechenzeit pro Tag; beim Testmodell zusätzlich der Vergleich auf denselben Favoriten („x-mal so lang“)
+- Kontrolle der Favoriten: Zeit pro Foto neben „Bisher“ und „Test“
+- Beim Laden eines Modells läuft ein Probelauf, damit der langsamere erste Durchlauf die Messung nicht verfälscht
+
 ## 1.1.2
 
 - Bilder und Liste aktualisieren sich selbst: alle 30 Sekunden Prüfung auf neue Fotos (nur bei sichtbarem Reiter und geschlossenem Popup); ganz oben lädt die Seite neu, sonst erscheint „N neue Fotos – anzeigen“

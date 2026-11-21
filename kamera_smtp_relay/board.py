@@ -1673,6 +1673,44 @@ class Board:
                 sink.close()
             return reply(False, "Speichern fehlgeschlagen: %s" % exc.strerror, 500)
 
+    @staticmethod
+    def _sec(ms):
+        return ("%.1f s" % (ms / 1000.0)).replace(".", ",") if ms else "-"
+
+    def _perf_block(self, st):
+        """Leistung der Modelle: Zeit pro Foto (ein Foto nach dem anderen), Threads, Arbeitsspeicher, Rechenzeit pro Tag."""
+        per_day = self.store.photos_per_day()
+        rows = []
+        for label, which, tag in (("Produktiv", "det", st["prod_tag"]), ("Test", "test", st["test_tag"])):
+            if which == "test" and not st["test_path"]:
+                continue
+            n, avg, mx = self.store.perf(which, tag)
+            mem = st["mem"].get(tag, {})
+            day = ("%d min" % round(per_day * avg / 60000.0)) if n else "-"
+            rows.append((label, n, avg, mx, mem, day))
+        if not rows:
+            return ""
+        trs = []
+        for label, n, avg, mx, mem, day in rows:
+            trs.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % (
+                label, e(str(mem.get("threads", st["threads"]))),
+                ("%s (%d Fotos)" % (self._sec(avg), n)) if n else "noch keine Messung",
+                self._sec(mx),
+                ("+%d MB beim Laden, +%d MB Spitze" % (mem.get("load_mb", 0), mem.get("peak_mb", 0))) if mem else "-",
+                e(day)))
+        note = ""
+        if st["test_path"]:
+            n, t_ms, d_ms = self.store.fav_perf(st["test_tag"], st["prod_tag"])
+            if n and d_ms:
+                note = ("<p>Auf denselben %d Favoriten: Test <b>%s</b>, Produktiv <b>%s</b> pro Foto, das Testmodell braucht etwa "
+                        "<b>%s</b> so lang.</p>" % (n, self._sec(t_ms), self._sec(d_ms), ("%.1f&times;" % (t_ms / d_ms)).replace(".", ",")))
+        return ("<h2>Leistung</h2><table><thead><tr><th>Modell</th><th>Threads</th><th>Zeit pro Foto (&Oslash;)</th>"
+                "<th>l&auml;ngstes</th><th>Arbeitsspeicher</th><th>Rechenzeit pro Tag*</th></tr></thead><tbody>%s</tbody></table>%s"
+                '<p class="small">Zeit pro Foto = Dekodieren, Auswerten und Rahmen, wall-clock auf %s Thread(s), die letzten Messungen. '
+                "Die Thread-Zahl wird beim Start gelesen, eine &Auml;nderung wirkt nach einem Neustart. *Hochrechnung: %.0f Fotos pro Tag "
+                "(Schnitt der letzten 7 Tage) mal Zeit pro Foto. Der Arbeitsspeicher ist der des ganzen Add-ons, daher ungef&auml;hr; "
+                "Messungen vor 1.1.3 fehlen.</p>" % ("".join(trs), note, e(str(st["threads"])), per_day))
+
     def render_models(self, base, message="", only_diff=False):
         d = self.detector
         st = d.status() if d is not None else None
@@ -1735,6 +1773,7 @@ class Board:
                   '<span id="mstat" class="small"></span><br><span class="small">Oder die Datei direkt in den Ordner <code>%s</code> legen '
                   "(das Add-on schaut alle 30 Sekunden nach). Ein neues Testmodell ersetzt das vorhandene.</span></p>" % e(_detect.TEST_DIR))
         test_block = "<h2>Testmodell (nur Favoriten)</h2>" + test_html + upload
+        perf_block = self._perf_block(st)
         # Neu pruefen
         rc = st["recheck"]
         if rc["active"]:
@@ -1772,8 +1811,12 @@ class Board:
             title = title or (r["camera"] or "").split("@")[0] or "Kamera"
             cap = "%s  -  %s" % (title, time.strftime("%d.%m.%y %H:%M:%S", time.localtime(r["received"])))
             now_txt = det_text(r).replace("\n", ", ") or "-"
+            if r["det_ms"]:
+                now_txt += " \u00b7 " + self._sec(r["det_ms"])
             if active:
                 test_txt = test_text(r).replace("\n", ", ")
+                if r["test_ms"]:
+                    test_txt += " \u00b7 " + self._sec(r["test_ms"])
                 line2 = '<div class="d%s">Test: %s</div>' % ("" if same else " diff", e(test_txt))
             elif st["test_path"]:
                 line2 = '<div class="d">Test: wird gepr&uuml;ft &hellip;</div>'
@@ -1798,7 +1841,7 @@ x.upload.onprogress=function(ev){if(ev.lengthComputable)s.textContent='Lade hoch
 x.onload=function(){var r={};try{r=JSON.parse(x.responseText);}catch(e){}b.disabled=false;
 if(x.status===200&&r.ok){location.href='models?m='+encodeURIComponent(r.msg);}else{s.textContent=(r.msg||('Fehler '+x.status));}};
 x.onerror=function(){b.disabled=false;s.textContent='Upload fehlgeschlagen (Verbindung).';};x.send(fl);};})();</script>"""
-        return self._models_shell(base, note + warn + prod_html + test_block + recheck_block + control + LIGHTBOX + script, refresh)
+        return self._models_shell(base, note + warn + prod_html + test_block + perf_block + recheck_block + control + LIGHTBOX + script, refresh)
 
     def _models_shell(self, base, body, refresh):
         return (

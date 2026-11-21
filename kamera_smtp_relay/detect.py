@@ -97,6 +97,18 @@ def refresh():
 refresh()
 
 
+def rss_mb():
+    """Arbeitsspeicher des Add-on-Prozesses in MB (aus /proc; 0, wenn nicht lesbar)."""
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
+
+
 def available():
     return os.path.isfile(MODEL_PATH) or os.path.isfile(BUILTIN_PATH)
 
@@ -113,6 +125,10 @@ class Detector:
             th = {k: float(thresholds) for k in th}
         self.thresholds = th
         self.thr = np.array([th[CLASS_LABELS[i]] for i in range(3)], dtype="float32")
+        self.threads = max(1, int(threads))
+        self.rss0 = rss_mb()
+        self.load_mb = 0.0   # Zuwachs des Arbeitsspeichers durch das Modell (inkl. Probelauf)
+        self.peak_mb = 0.0   # hoechster Zuwachs waehrend der Auswertung
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = int(threads)
         opts.inter_op_num_threads = 1
@@ -126,6 +142,12 @@ class Detector:
         if len(oshp) != 3 or (isinstance(oshp[1], int) and oshp[1] != 7):
             raise ValueError("Modell-Ausgabe %s nicht unterstuetzt (erwartet [1, 7, N]: 4 Box-Werte + 3 Klassen)" % (oshp,))
         self.lock = threading.Lock()
+        try:   # Probelauf: der erste Durchlauf ist langsamer und belegt den Arbeitsspeicher; er soll die Messung nicht verfaelschen
+            self.session.run(None, {self.input: np.full((1, 3, self.size, self.size), 0.45, dtype="float32")})
+        except Exception:
+            pass
+        self.load_mb = max(0.0, rss_mb() - self.rss0)
+        self.peak_mb = self.load_mb
 
     def _prepare(self, data):
         from PIL import Image
@@ -164,15 +186,17 @@ class Detector:
     def analyse(self, data):
         """Gibt {"confs": {"mensch": 0.9, ...}, "n"} zurueck; confs ist leer, wenn nichts gefunden wurde."""
         np = self.np
+        t0 = time.perf_counter()
         blob, (padx, pady, nw, nh) = self._prepare(data)
         with self.lock:
             out = self.session.run(None, {self.input: blob})[0][0].T   # [Anker, 4 + Klassen]
+        self.peak_mb = max(self.peak_mb, rss_mb() - self.rss0)
         cls = out[:, 4:7]
         cid = cls.argmax(1)
         score = cls.max(1)
         mask = score >= self.thr[cid]
         if not mask.any():
-            return {"confs": {}, "n": 0, "boxes": []}
+            return {"confs": {}, "n": 0, "boxes": [], "ms": round((time.perf_counter() - t0) * 1000)}
         o = out[mask]
         boxes = np.stack((o[:, 0] - o[:, 2] / 2, o[:, 1] - o[:, 3] / 2,
                           o[:, 0] + o[:, 2] / 2, o[:, 1] + o[:, 3] / 2), 1)
@@ -189,7 +213,7 @@ class Detector:
             x1, y1, x2, y2 = (min(1.0, max(0.0, float(v))) for v in (x1, y1, x2, y2))
             if x2 - x1 > 0.002 and y2 - y1 > 0.002:
                 found.append((name, round(float(c), 2), x1, y1, x2, y2))
-        return {"confs": confs, "n": len(keep), "boxes": found}
+        return {"confs": confs, "n": len(keep), "boxes": found, "ms": round((time.perf_counter() - t0) * 1000)}
 
 
 def encode_boxes(boxes):
@@ -245,6 +269,8 @@ class DetectWorker(threading.Thread):
         self.test_used = 0.0
         self.test_left = 0
         self.test_started = 0.0
+        self.mem = {}        # Modellkennung -> {"threads", "load_mb", "peak_mb"} (bleibt auch nach dem Entladen)
+        self.last_ms = 0     # mittlere Zeit pro Foto der zuletzt ausgewerteten Mail
         self.recheck = {"active": False, "total": 0, "done": 0, "cancel": False, "started": 0.0, "finished": 0.0}
         self.ok = True
 
@@ -281,7 +307,7 @@ class DetectWorker(threading.Thread):
             "ok": self.ok, "prod_path": MODEL_PATH, "prod_tag": MODEL_TAG, "builtin": MODEL_PATH == BUILTIN_PATH,
             "size": getattr(self.detector, "size", 0), "test_path": TEST_PATH, "test_tag": TEST_TAG,
             "test_error": self.test_error, "test_loaded": self.test_detector is not None,
-            "recheck": dict(self.recheck),
+            "recheck": dict(self.recheck), "mem": dict(self.mem), "threads": self.threads,
             "bad": [(os.path.basename(f), BAD[_file_tag(f)]) for f in list_models(MODEL_DIR) if _file_tag(f) in BAD],
         }
 
@@ -369,8 +395,12 @@ class DetectWorker(threading.Thread):
             import gc
             gc.collect()
 
+    def _remember(self, tag, detector):
+        self.mem[tag] = {"threads": detector.threads, "load_mb": round(detector.load_mb),
+                         "peak_mb": round(detector.peak_mb)}
+
     def _analyse_all(self, detector, mail_id, images):
-        merged, done, total, first_boxes = {}, 0, 0, ""
+        merged, done, total, first_boxes, ms = {}, 0, 0, "", 0
         for idx, data in enumerate(images):
             try:
                 res = detector.analyse(data)
@@ -378,11 +408,13 @@ class DetectWorker(threading.Thread):
                 log.debug("Bild in Mail %s nicht auswertbar: %r", mail_id, exc)
                 continue
             done += 1
+            ms += res.get("ms", 0)
             total += res["n"]
             if idx == 0:   # Rahmen nur fuers erste Foto (das Vorschaubild im Board)
                 first_boxes = encode_boxes(res.get("boxes", []))
             for k, v in res["confs"].items():
                 merged[k] = max(merged.get(k, 0.0), v)
+        self.last_ms = round(ms / done) if done else 0
         return merged, done, total, first_boxes
 
     def process_test(self, mail_id):
@@ -399,7 +431,8 @@ class DetectWorker(threading.Thread):
             self.store.set_test(mail_id, "fehler", "", "", TEST_TAG)
             return
         label, confs, _best = encode(merged)
-        self.store.set_test(mail_id, label, confs, first_boxes, TEST_TAG)
+        self.store.set_test(mail_id, label, confs, first_boxes, TEST_TAG, ms=self.last_ms)
+        self._remember(TEST_TAG, self.test_detector)
 
     def process(self, mail_id):
         images = self.store.mail_images(mail_id, self.MAX_IMAGES)
@@ -410,7 +443,7 @@ class DetectWorker(threading.Thread):
                 self.store.set_detection(mail_id, "leer", 0.0, 0, MODEL_TAG)
             self._release(mail_id, "fehler")   # nichts auswertbar: nie wegen fehlender Fotos filtern
             return
-        merged, done, total, first_boxes = {}, 0, 0, ""
+        merged, done, total, first_boxes, ms = {}, 0, 0, "", 0
         for idx, data in enumerate(images):
             try:
                 res = self.detector.analyse(data)
@@ -418,6 +451,7 @@ class DetectWorker(threading.Thread):
                 log.debug("Bild in Mail %s nicht auswertbar: %r", mail_id, exc)
                 continue
             done += 1
+            ms += res.get("ms", 0)
             total += res["n"]
             if idx == 0:   # Rahmen nur fuers erste Foto (das Vorschaubild im Board)
                 first_boxes = encode_boxes(res.get("boxes", []))
@@ -428,7 +462,8 @@ class DetectWorker(threading.Thread):
             self._release(mail_id, "fehler")
             return
         label, confs, best = encode(merged)
-        self.store.set_detection(mail_id, label, best, done, MODEL_TAG, confs, first_boxes)
+        self.store.set_detection(mail_id, label, best, done, MODEL_TAG, confs, first_boxes, ms=round(ms / done))
+        self._remember(self.loaded_tag or MODEL_TAG, self.detector)
         self._release(mail_id, label)
 
     def run(self):

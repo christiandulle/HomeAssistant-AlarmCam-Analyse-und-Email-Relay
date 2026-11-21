@@ -67,7 +67,9 @@ CREATE TABLE IF NOT EXISTS mails (
   test_confs TEXT DEFAULT '',
   test_boxes TEXT DEFAULT '',
   test_model TEXT DEFAULT '',
-  pbytes INTEGER DEFAULT 0
+  pbytes INTEGER DEFAULT 0,
+  det_ms INTEGER DEFAULT 0,
+  test_ms INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_status ON mails(status, next_attempt);
 CREATE INDEX IF NOT EXISTS idx_camera ON mails(camera, passed);
@@ -338,7 +340,8 @@ class Store:
                              ("det_boxes", "TEXT DEFAULT ''"), ("fav", "INTEGER DEFAULT 0"),
                              ("test_label", "TEXT DEFAULT ''"), ("test_confs", "TEXT DEFAULT ''"),
                              ("test_boxes", "TEXT DEFAULT ''"), ("test_model", "TEXT DEFAULT ''"),
-                             ("pbytes", "INTEGER DEFAULT 0"), ("ppath", "TEXT DEFAULT ''")):
+                             ("pbytes", "INTEGER DEFAULT 0"), ("ppath", "TEXT DEFAULT ''"),
+                             ("det_ms", "INTEGER DEFAULT 0"), ("test_ms", "INTEGER DEFAULT 0")):
                 if col not in mail_cols:  # Bilderkennung (ab 1.11.0)
                     self.db.execute("ALTER TABLE mails ADD COLUMN %s %s" % (col, ddl))
             columns = [r[1] for r in self.db.execute("PRAGMA table_info(cameras)")]
@@ -1076,10 +1079,15 @@ class Store:
                         break
         return out
 
-    def set_detection(self, mail_id, label, conf=0.0, n=0, model="", confs="", boxes=""):
-        """label: "mensch,tier" (Etiketten mit Komma), "leer" oder "fehler"; confs: "mensch:0.88,tier:0.9"."""
-        self._exec("UPDATE mails SET det_label=?, det_conf=?, det_n=?, det_model=?, det_confs=?, det_boxes=? WHERE id=?",
-                   (label, float(conf), int(n), model, confs, boxes, mail_id))
+    def set_detection(self, mail_id, label, conf=0.0, n=0, model="", confs="", boxes="", ms=None):
+        """label: "mensch,tier" (Etiketten mit Komma), "leer" oder "fehler"; confs: "mensch:0.88,tier:0.9".
+        ms: mittlere Rechenzeit pro Foto in Millisekunden (None = unveraendert)."""
+        if ms is None:
+            self._exec("UPDATE mails SET det_label=?, det_conf=?, det_n=?, det_model=?, det_confs=?, det_boxes=? WHERE id=?",
+                       (label, float(conf), int(n), model, confs, boxes, mail_id))
+        else:
+            self._exec("UPDATE mails SET det_label=?, det_conf=?, det_n=?, det_model=?, det_confs=?, det_boxes=?, det_ms=? WHERE id=?",
+                       (label, float(conf), int(n), model, confs, boxes, int(ms), mail_id))
 
     def set_detection_model(self, mail_id, model):
         """Nur das Modell vermerken (Ergebnis bleibt), z. B. wenn die Fotos nicht mehr da sind."""
@@ -1094,10 +1102,37 @@ class Store:
         rows = self._query("SELECT fav FROM mails WHERE id=?", (mail_id,))
         return int(rows[0]["fav"]) if rows else None
 
-    def set_test(self, mail_id, label, confs="", boxes="", model=""):
+    def set_test(self, mail_id, label, confs="", boxes="", model="", ms=None):
         """Ergebnis des Testmodells (nur Favoriten); das Ergebnis des laufenden Modells bleibt unberuehrt."""
-        self._exec("UPDATE mails SET test_label=?, test_confs=?, test_boxes=?, test_model=? WHERE id=?",
-                   (label, confs, boxes, model, mail_id))
+        if ms is None:
+            self._exec("UPDATE mails SET test_label=?, test_confs=?, test_boxes=?, test_model=? WHERE id=?",
+                       (label, confs, boxes, model, mail_id))
+        else:
+            self._exec("UPDATE mails SET test_label=?, test_confs=?, test_boxes=?, test_model=?, test_ms=? WHERE id=?",
+                       (label, confs, boxes, model, int(ms), mail_id))
+
+    def perf(self, which, model, limit=200):
+        """Rechenzeit pro Foto eines Modells (die letzten Messungen): (Anzahl, Mittel ms, Maximum ms).
+        which: "det" (laufendes Modell) oder "test"."""
+        col, mcol = ("det_ms", "det_model") if which == "det" else ("test_ms", "test_model")
+        rows = self._query("SELECT COUNT(*) AS n, AVG(v) AS a, MAX(v) AS m FROM"
+                           " (SELECT %s AS v FROM mails WHERE %s=? AND %s>0 ORDER BY id DESC LIMIT ?)" % (col, mcol, col),
+                           (model, int(limit)))
+        r = rows[0] if rows else None
+        return (int(r["n"] or 0), float(r["a"] or 0), int(r["m"] or 0)) if r else (0, 0.0, 0)
+
+    def fav_perf(self, test_model, prod_model):
+        """Mittlere Zeit pro Foto auf denselben Favoriten: (Anzahl, Test ms, laufendes Modell ms)."""
+        rows = self._query("SELECT COUNT(*) AS n, AVG(test_ms) AS t, AVG(det_ms) AS d FROM mails"
+                           " WHERE fav=1 AND test_model=? AND test_ms>0 AND det_model=? AND det_ms>0", (test_model, prod_model))
+        r = rows[0] if rows else None
+        return (int(r["n"] or 0), float(r["t"] or 0), float(r["d"] or 0)) if r else (0, 0.0, 0.0)
+
+    def photos_per_day(self, days=7):
+        """Durchschnittliche Zahl neuer Fotos pro Tag in den letzten Tagen (zur Hochrechnung der Rechenzeit)."""
+        since = time.time() - days * 86400
+        rows = self._query("SELECT COALESCE(SUM(n_images),0) AS n FROM mails WHERE received>=?", (since,))
+        return (int(rows[0]["n"]) if rows else 0) / float(days)
 
     def pending_test(self, model):
         """Favoriten mit Foto, die noch nicht mit dem Testmodell geprueft wurden (neueste zuerst)."""
@@ -1126,7 +1161,7 @@ class Store:
     def promote_test(self, test_tag, prod_tag):
         """Testmodell wird produktiv: bei Favoriten das schon berechnete Testergebnis als normales Ergebnis uebernehmen."""
         n = 0
-        for r in self._query("SELECT id, det_n, test_label, test_confs, test_boxes FROM mails"
+        for r in self._query("SELECT id, det_n, test_label, test_confs, test_boxes, test_ms FROM mails"
                              " WHERE fav=1 AND test_model=? AND test_label NOT IN ('', 'fehler')", (test_tag,)):
             best = 0.0
             for part in (r["test_confs"] or "").split(","):
@@ -1135,7 +1170,8 @@ class Store:
                     best = max(best, float(val))
                 except ValueError:
                     pass
-            self.set_detection(r["id"], r["test_label"], best, r["det_n"] or 1, prod_tag, r["test_confs"], r["test_boxes"])
+            self.set_detection(r["id"], r["test_label"], best, r["det_n"] or 1, prod_tag, r["test_confs"], r["test_boxes"],
+                              ms=r["test_ms"] or None)
             n += 1
         return n
 
