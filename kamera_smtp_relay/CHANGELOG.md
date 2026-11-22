@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.7
+
+- Erkennung merkt sich je Foto und Modell die **sicherste Erkennung jeder Klasse auch unter der Schwelle** (ab 10 %) samt Rahmen. Das passiert bei jeder Auswertung, die Anzeige gilt nur für Favoriten
+- Große Bild und Kontrolle: Erkennungen unter der Schwelle erscheinen **grau** („Tier 18 % (unter Schwelle)“), im Foto als grauer gepunkteter Rahmen, getrennt für „Bisher“ und „Test“. Werte gibt es für Favoriten, die nach dem Update mit „Favoriten jetzt prüfen“ (Test) bzw. „Favoriten mit diesem Modell neu prüfen“ (Produktiv) gelaufen sind
+- Modelle: **eigene Schwellen je Modell** (Tier, Mensch, Fahrzeug in %), einstellbar für Produktiv- und Testmodell direkt im Reiter. Sie gelten sofort für neue Fotos, werden in `schwellen.json` im Modellordner gespeichert und gehen beim „Test in Produktion setzen“ mit dem Modell mit. Ohne eigene Einstellung gelten die Werte aus der Add-on-Konfiguration
+- Modelle: neuer Knopf „Favoriten mit diesem Modell neu prüfen“ beim Produktivmodell (nur Favoriten, mit Fortschritt und Abbrechen)
+- „Test in Produktion setzen“ übernimmt auch die Werte unter der Schwelle der Favoriten
+
 ## 1.1.6
 
 - Modelle: Jedes Modell (Produktiv, Test) zeigt unter dem hervorgehobenen Namen Dateigröße, Eingabegröße in Pixeln, durchschnittliche Zeit pro Foto und die **Trefferquote** auf deinen gelabelten Favoriten; die Werte aktualisieren sich während des Favoriten-Tests selbst

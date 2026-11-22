@@ -27,6 +27,56 @@ DEFAULT_THRESHOLDS = {"tier": 0.25, "mensch": 0.30, "fahrzeug": 0.50}
 ORDER = ("mensch", "tier", "fahrzeug")   # Reihenfolge der Anzeige
 BASE_TAG = "megadetector-v6-4"   # Kennung des eingebauten Modells
 PRIORITY = {"mensch": 3, "tier": 2, "fahrzeug": 1, "leer": 0}
+LOW_FLOOR = 0.10   # darunter wird nichts mehr gemerkt (kleinste einstellbare Schwelle)
+THR_FILE = os.path.join(MODEL_DIR, "schwellen.json")   # Schwellen je Modell (Reiter Modelle), gilt vor der Add-on-Konfiguration
+CFG_THRESHOLDS = dict(DEFAULT_THRESHOLDS)               # Standard aus der Add-on-Konfiguration (setzt der Worker)
+
+
+def thr_key(tag):
+    """Schluessel eines Modells fuer die Schwellen: der Inhalts-Hash (Test und Produktiv derselben Datei teilen ihn)."""
+    for pre in ("extern-", "test-"):
+        if tag.startswith(pre):
+            return tag[len(pre):]
+    return tag or "eingebaut"
+
+
+def _read_thr():
+    import json
+    try:
+        with open(THR_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def thresholds_for(tag, default=None):
+    """Schwellen eines Modells: eigene Einstellung (Reiter Modelle), sonst die Add-on-Konfiguration."""
+    th = dict(default if isinstance(default, dict) else CFG_THRESHOLDS)
+    own = _read_thr().get(thr_key(tag))
+    if isinstance(own, dict):
+        for k in DEFAULT_THRESHOLDS:
+            try:
+                th[k] = min(0.95, max(LOW_FLOOR, float(own[k])))
+            except (KeyError, TypeError, ValueError):
+                pass
+    return th
+
+
+def has_own_thresholds(tag):
+    return isinstance(_read_thr().get(thr_key(tag)), dict)
+
+
+def save_thresholds(tag, th):
+    """Schwellen eines Modells dauerhaft speichern (Werte 0.10 bis 0.95)."""
+    import json
+    data = _read_thr()
+    data[thr_key(tag)] = {k: round(min(0.95, max(LOW_FLOOR, float(th[k]))), 2) for k in DEFAULT_THRESHOLDS}
+    os.makedirs(os.path.dirname(THR_FILE), exist_ok=True)
+    tmp = THR_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, THR_FILE)
 
 
 _tag_cache = {}
@@ -123,8 +173,7 @@ class Detector:
             th.update(thresholds)
         elif thresholds is not None:       # eine Zahl gilt fuer alle Klassen
             th = {k: float(thresholds) for k in th}
-        self.thresholds = th
-        self.thr = np.array([th[CLASS_LABELS[i]] for i in range(3)], dtype="float32")
+        self.set_thresholds(th)
         self.threads = max(1, int(threads))
         self.rss0 = rss_mb()
         self.load_mb = 0.0   # Zuwachs des Arbeitsspeichers durch das Modell (inkl. Probelauf)
@@ -148,6 +197,11 @@ class Detector:
             pass
         self.load_mb = max(0.0, rss_mb() - self.rss0)
         self.peak_mb = self.load_mb
+
+    def set_thresholds(self, th):
+        """Schwellen setzen (gilt ab dem naechsten Foto)."""
+        self.thresholds = dict(th)
+        self.thr = self.np.array([th[CLASS_LABELS[i]] for i in range(3)], dtype="float32")
 
     def _prepare(self, data):
         from PIL import Image
@@ -194,9 +248,21 @@ class Detector:
         cls = out[:, 4:7]
         cid = cls.argmax(1)
         score = cls.max(1)
+
+        def norm(b):   # Mittelpunkt/Breite/Hoehe im Modellbild -> Ecken im Originalbild (0..1), Auffuellrand abgezogen
+            x1, x2 = ((b[0] - b[2] / 2 - padx) / nw, (b[0] + b[2] / 2 - padx) / nw)
+            y1, y2 = ((b[1] - b[3] / 2 - pady) / nh, (b[1] + b[3] / 2 - pady) / nh)
+            return tuple(min(1.0, max(0.0, float(v))) for v in (x1, y1, x2, y2))
+
+        low = {}   # je Klasse die sicherste Erkennung, auch unter der Schwelle: {"tier": (0.18, x1, y1, x2, y2)}
+        for c in range(3):
+            idx = np.flatnonzero((cid == c) & (score >= LOW_FLOOR))
+            if idx.size:
+                j = idx[score[idx].argmax()]
+                low[CLASS_LABELS[c]] = (round(float(score[j]), 2),) + norm(out[j, :4])
         mask = score >= self.thr[cid]
         if not mask.any():
-            return {"confs": {}, "n": 0, "boxes": [], "ms": round((time.perf_counter() - t0) * 1000)}
+            return {"confs": {}, "n": 0, "boxes": [], "low": low, "ms": round((time.perf_counter() - t0) * 1000)}
         o = out[mask]
         boxes = np.stack((o[:, 0] - o[:, 2] / 2, o[:, 1] - o[:, 3] / 2,
                           o[:, 0] + o[:, 2] / 2, o[:, 1] + o[:, 3] / 2), 1)
@@ -213,12 +279,20 @@ class Detector:
             x1, y1, x2, y2 = (min(1.0, max(0.0, float(v))) for v in (x1, y1, x2, y2))
             if x2 - x1 > 0.002 and y2 - y1 > 0.002:
                 found.append((name, round(float(c), 2), x1, y1, x2, y2))
-        return {"confs": confs, "n": len(keep), "boxes": found, "ms": round((time.perf_counter() - t0) * 1000)}
+        return {"confs": confs, "n": len(keep), "boxes": found, "low": low,
+                "ms": round((time.perf_counter() - t0) * 1000)}
 
 
 def encode_boxes(boxes):
     """[(name, conf, x1, y1, x2, y2)] -> "tier:0.91:0.123:0.2:0.4:0.5;..." (Koordinaten 0..1)"""
     return ";".join("%s:%.2f:%.3f:%.3f:%.3f:%.3f" % b for b in boxes)
+
+
+def encode_low(low):
+    """{"tier": (0.18, x1, y1, x2, y2), ...} -> ("tier:0.18", "tier:0.18:x1:y1:x2:y2")  (Sicherheit je Klasse, Rahmen)"""
+    names = [k for k in ORDER if k in low]
+    return (",".join("%s:%.2f" % (k, low[k][0]) for k in names),
+            encode_boxes([(k,) + tuple(low[k]) for k in names if low[k][3] - low[k][1] > 0.002 and low[k][4] - low[k][2] > 0.002]))
 
 
 def encode(confs):
@@ -254,6 +328,9 @@ class DetectWorker(threading.Thread):
         import itertools
         self.store = store
         self.thresholds = thresholds
+        global CFG_THRESHOLDS
+        if isinstance(thresholds, dict):
+            CFG_THRESHOLDS = dict(DEFAULT_THRESHOLDS, **thresholds)
         self.backlog = backlog
         self.threads = max(1, int(threads))
         self.queue = queue.PriorityQueue()   # neue Mails (0) vor dem Bestand (1) vor der manuellen Neu-Pruefung (2)
@@ -308,17 +385,28 @@ class DetectWorker(threading.Thread):
             f.update(active=False, cancelled=True, finished=time.time(), loading=False, cur=0)
             log.info("Testmodell: Favoriten-Test abgebrochen (%d von %d)", f["done"], f["total"])
 
-    def recheck_start(self):
-        """Manuell: alle Fotos im Bestand mit dem produktiven Modell neu auswerten. Gibt die Anzahl zurueck."""
+    def recheck_start(self, favorites_only=False):
+        """Manuell: alle Fotos im Bestand (oder nur die Favoriten) mit dem produktiven Modell neu auswerten. Gibt die Anzahl zurueck."""
         if self.recheck["active"]:
             return 0
-        ids = self.store.all_image_ids()
+        ids = self.store.all_fav_ids() if favorites_only else self.store.all_image_ids()
         self.recheck.update(active=bool(ids), total=len(ids), done=0, cancel=False, started=time.time())
         for mail_id in ids:
             self.queue.put((2, next(self.seq), mail_id, "recheck"))
         if ids:
             log.info("Bestand neu pruefen: %d Foto(s) werden mit dem produktiven Modell ausgewertet", len(ids))
         return len(ids)
+
+    def set_thresholds(self, which, th):
+        """Schwellen eines Modells speichern ("det" = produktiv, "test") und beim geladenen Modell sofort setzen."""
+        tag = MODEL_TAG if which == "det" else TEST_TAG
+        if not tag:
+            return False
+        save_thresholds(tag, th)
+        det = self.detector if which == "det" else self.test_detector
+        if det is not None:
+            det.set_thresholds(thresholds_for(tag, self.thresholds))
+        return True
 
     def recheck_cancel(self):
         if self.recheck["active"]:
@@ -350,7 +438,7 @@ class DetectWorker(threading.Thread):
         """Laedt das produktive Modell. Eine nicht ladbare Datei im Hauptordner wird gemerkt und uebergangen."""
         while True:
             try:
-                self.detector = Detector(self.thresholds, model_path=MODEL_PATH, threads=self.threads)
+                self.detector = Detector(thresholds_for(MODEL_TAG, self.thresholds), model_path=MODEL_PATH, threads=self.threads)
                 self.loaded_tag = MODEL_TAG
                 return
             except Exception as exc:
@@ -375,7 +463,7 @@ class DetectWorker(threading.Thread):
 
     def _load_test(self):
         try:
-            self.test_detector = Detector(self.thresholds, model_path=TEST_PATH, threads=self.threads)
+            self.test_detector = Detector(thresholds_for(TEST_TAG, self.thresholds), model_path=TEST_PATH, threads=self.threads)
             self.test_error = ""
             log.info("Testmodell bereit (%s, %d px): wertet nur Favoriten aus", TEST_PATH, self.test_detector.size)
         except Exception as exc:
@@ -420,7 +508,9 @@ class DetectWorker(threading.Thread):
                          "peak_mb": round(detector.peak_mb), "size": detector.size}
 
     def _analyse_all(self, detector, mail_id, images):
+        """Wertet alle Fotos einer Mail aus: (Klassen, Fotos, Treffer, Rahmen, Sicherheiten unter Schwelle, Rahmen dazu)."""
         merged, done, total, first_boxes, ms = {}, 0, 0, "", 0
+        lowc, first_low = {}, {}
         for idx, data in enumerate(images):
             try:
                 res = detector.analyse(data)
@@ -432,10 +522,16 @@ class DetectWorker(threading.Thread):
             total += res["n"]
             if idx == 0:   # Rahmen nur fuers erste Foto (das Vorschaubild im Board)
                 first_boxes = encode_boxes(res.get("boxes", []))
+                first_low = res.get("low", {})
             for k, v in res["confs"].items():
                 merged[k] = max(merged.get(k, 0.0), v)
+            for k, v in res.get("low", {}).items():
+                lowc[k] = max(lowc.get(k, 0.0), v[0])
         self.last_ms = round(ms / done) if done else 0
-        return merged, done, total, first_boxes
+        low = {}
+        for k, c in lowc.items():   # Sicherheit: bestes Foto der Mail; Rahmen nur, wenn er aus dem ersten Foto stammt
+            low[k] = first_low[k] if k in first_low and first_low[k][0] >= c else (c, 0, 0, 0, 0)
+        return merged, done, total, first_boxes, low
 
     def process_test(self, mail_id):
         """Wertet einen Favoriten mit dem Testmodell aus. Gibt die Zeit pro Foto in ms zurueck (0 = nichts gemessen)."""
@@ -451,12 +547,13 @@ class DetectWorker(threading.Thread):
                 return 0
         self.test_used = time.time()
         images = self.store.mail_images(mail_id, self.MAX_IMAGES)
-        merged, done, total, first_boxes = self._analyse_all(self.test_detector, mail_id, images) if images else ({}, 0, 0, "")
+        merged, done, total, first_boxes, low = self._analyse_all(self.test_detector, mail_id, images) if images else ({}, 0, 0, "", {})
         if not done:
             self.store.set_test(mail_id, "fehler", "", "", TEST_TAG)
             return 0
         label, confs, _best = encode(merged)
-        self.store.set_test(mail_id, label, confs, first_boxes, TEST_TAG, ms=self.last_ms)
+        lowc, lowb = encode_low(low)
+        self.store.set_test(mail_id, label, confs, first_boxes, TEST_TAG, ms=self.last_ms, low=lowc, lowb=lowb)
         self._remember(TEST_TAG, self.test_detector)
         return self.last_ms
 
@@ -469,26 +566,14 @@ class DetectWorker(threading.Thread):
                 self.store.set_detection(mail_id, "leer", 0.0, 0, MODEL_TAG)
             self._release(mail_id, "fehler")   # nichts auswertbar: nie wegen fehlender Fotos filtern
             return
-        merged, done, total, first_boxes, ms = {}, 0, 0, "", 0
-        for idx, data in enumerate(images):
-            try:
-                res = self.detector.analyse(data)
-            except Exception as exc:
-                log.debug("Bild in Mail %s nicht auswertbar: %r", mail_id, exc)
-                continue
-            done += 1
-            ms += res.get("ms", 0)
-            total += res["n"]
-            if idx == 0:   # Rahmen nur fuers erste Foto (das Vorschaubild im Board)
-                first_boxes = encode_boxes(res.get("boxes", []))
-            for k, v in res["confs"].items():
-                merged[k] = max(merged.get(k, 0.0), v)
+        merged, done, total, first_boxes, low = self._analyse_all(self.detector, mail_id, images)
         if not done:
             self.store.set_detection(mail_id, "fehler", 0.0, 0, MODEL_TAG)
             self._release(mail_id, "fehler")
             return
         label, confs, best = encode(merged)
-        self.store.set_detection(mail_id, label, best, done, MODEL_TAG, confs, first_boxes, ms=round(ms / done))
+        lowc, lowb = encode_low(low)
+        self.store.set_detection(mail_id, label, best, done, MODEL_TAG, confs, first_boxes, ms=self.last_ms, low=lowc, lowb=lowb)
         self._remember(self.loaded_tag or MODEL_TAG, self.detector)
         self._release(mail_id, label)
 

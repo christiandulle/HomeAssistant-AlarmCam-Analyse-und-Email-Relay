@@ -97,14 +97,14 @@ var bxl=document.getElementById('lbb'),bxb=document.getElementById('lbbx'),fvb=d
 try{showBox=localStorage.getItem('kameraBoxes')!=='0';}catch(e){}
 var BC={mensch:'#c07a1a',tier:'#3f8f4a',fahrzeug:'#3a7bbf'},BN={mensch:'Mensch',tier:'Tier',fahrzeug:'Fahrzeug'};
 function boxBtn(){bxb.style.opacity=showBox?'1':'.45';}boxBtn();
-function boxHtml(t,test){var h='';(t||'').split(';').forEach(function(p){var a=p.split(':');if(a.length<6)return;
-var x1=+a[2],y1=+a[3],x2=+a[4],y2=+a[5],c=BC[a[0]]||'#fff';
-h+='<div style="position:absolute;left:'+(x1*100)+'%;top:'+(y1*100)+'%;width:'+((x2-x1)*100)+'%;height:'+((y2-y1)*100)+'%;border:1px '+(test?'dashed':'solid')+' '+c+';box-sizing:border-box"><span style="position:absolute;left:-1px;'+(test?'bottom':'top')+':-20px;background:'+c+';color:#fff;font-size:12px;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap">'+(test?'Test ':'')+(BN[a[0]]||a[0])+' '+Math.round(+a[1]*100)+' %</span></div>';});return h;}
-function placeBoxes(){var t=bxl.getAttribute('data-b')||'',tt=bxl.getAttribute('data-tb')||'';
-if((!t&&!tt)||!showBox){bxl.style.display='none';return;}
+function boxHtml(t,test,low){var h='';(t||'').split(';').forEach(function(p){var a=p.split(':');if(a.length<6)return;
+var x1=+a[2],y1=+a[3],x2=+a[4],y2=+a[5],c=low?'#8c8c8c':(BC[a[0]]||'#fff');
+h+='<div style="position:absolute;left:'+(x1*100)+'%;top:'+(y1*100)+'%;width:'+((x2-x1)*100)+'%;height:'+((y2-y1)*100)+'%;border:1px '+(low?'dotted':(test?'dashed':'solid'))+' '+c+';box-sizing:border-box"><span style="position:absolute;left:-1px;'+(test?'bottom':'top')+':-20px;background:'+c+';color:#fff;font-size:12px;font-weight:'+(low?'500':'700')+';padding:1px 5px;border-radius:3px;white-space:nowrap">'+(test?'Test ':'')+(BN[a[0]]||a[0])+' '+Math.round(+a[1]*100)+' %'+(low?' (unter Schwelle)':'')+'</span></div>';});return h;}
+function placeBoxes(){var t=bxl.getAttribute('data-b')||'',tt=bxl.getAttribute('data-tb')||'',lb=bxl.getAttribute('data-lb')||'',tlb=bxl.getAttribute('data-tlb')||'';
+if((!t&&!tt&&!lb&&!tlb)||!showBox){bxl.style.display='none';return;}
 var r=im.getBoundingClientRect();if(!r.width){bxl.style.display='none';return;}
-var key=t+'|'+tt;
-if(bxl.getAttribute('data-done')!==key){bxl.innerHTML=boxHtml(t,false)+boxHtml(tt,true);bxl.setAttribute('data-done',key);}
+var key=t+'|'+tt+'|'+lb+'|'+tlb;
+if(bxl.getAttribute('data-done')!==key){bxl.innerHTML=boxHtml(lb,false,true)+boxHtml(tlb,true,true)+boxHtml(t,false)+boxHtml(tt,true);bxl.setAttribute('data-done',key);}
 bxl.style.left=r.left+'px';bxl.style.top=r.top+'px';bxl.style.width=r.width+'px';bxl.style.height=r.height+'px';bxl.style.display='block';}
 function label(){lbv.textContent=(parseInt(sel.value,10)/1000).toFixed(1).replace('.',',')+' s';}
 try{var saved=parseInt(localStorage.getItem('kameraSpeed'),10);if(saved>=100&&saved<=3000)sel.value=saved;}catch(e){}
@@ -126,8 +126,8 @@ w=w.replace(id,'').trim();var m=w.match(/\\d{1,2}:\\d{2}(:\\d{2})?/),tm=m?m[0]:'
 cap.textContent='';var d1=document.createElement('div'),d2=document.createElement('div');d2.className='ct';
 d1.textContent='Foto '+(fwd?list.length-i:i+1)+' von '+list.length+(moreB()?'+':'')+' \u00b7 '+title+(dt?' \u00b7 '+dt:'')+(id?' '+id:'');d2.textContent=tm;
 cap.appendChild(d1);if(tm)cap.appendChild(d2);}
-function placeDet(){placeBoxes();var t=dtx.getAttribute('data-t')||'';if(!t||Z.s!==1){dtx.style.display='none';return;}
-var r=im.getBoundingClientRect();dtx.textContent=t;dtx.style.left=(r.left+8)+'px';dtx.style.top=(r.top+8)+'px';dtx.style.display='block';}
+function placeDet(){placeBoxes();var t=dtx.getAttribute('data-t')||'';if(!t&&dtx.getAttribute('data-low'))t='\\u200b';if(!t||Z.s!==1){dtx.style.display='none';return;}
+var r=im.getBoundingClientRect();dtx.textContent=t;var lw=dtx.getAttribute('data-low')||'';if(lw){var sp=document.createElement('span');sp.className='lo';sp.textContent='\\n'+lw;dtx.appendChild(sp);}dtx.style.left=(r.left+8)+'px';dtx.style.top=(r.top+8)+'px';dtx.style.display='block';}
 window.addEventListener('resize',placeDet);
 var snb=document.getElementById('lbsend');
 function sndBtn(a){var k=a.getAttribute('data-sk')||'',w=a.getAttribute('data-st')||'';
@@ -154,7 +154,7 @@ function setFav(a,v){a.setAttribute('data-fav',v?'1':'0');var old=a.querySelecto
 function toggleFav(){var a=list[pos];if(!a||!a.getAttribute('data-id'))return;var want=a.getAttribute('data-fav')==='1'?0:1;
 setFav(a,want);favBtn(a);var x=new XMLHttpRequest();x.open('POST','api/fav/'+a.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
 x.onload=function(){if(x.status!==200){setFav(a,!want);favBtn(list[pos]);}};x.onerror=function(){setFav(a,!want);favBtn(list[pos]);};x.send('v='+want);}
-function show(i){pos=i;resetZoom();var a=list[i];var dt=a.getAttribute('data-det')||'',tt=a.getAttribute('data-test')||'';sndBtn(a);dtx.setAttribute('data-t',tt?'Bisher: '+(dt||'-').replace(/\\n/g,', ')+'\\nTest: '+tt.replace(/\\n/g,', '):dt);favBtn(a);dtx.style.display='none';bxl.setAttribute('data-b',a.getAttribute('data-box')||'');bxl.setAttribute('data-tb',tt?(a.getAttribute('data-tbox')||''):'');bxl.style.display='none';im.onload=im.onerror=function(){placeDet();schedule();};im.src=a.href;
+function show(i){pos=i;resetZoom();var a=list[i];var dt=a.getAttribute('data-det')||'',tt=a.getAttribute('data-test')||'';sndBtn(a);dtx.setAttribute('data-t',tt?'Bisher: '+(dt||'-').replace(/\\n/g,', ')+'\\nTest: '+tt.replace(/\\n/g,', '):dt);favBtn(a);dtx.style.display='none';bxl.setAttribute('data-b',a.getAttribute('data-box')||'');bxl.setAttribute('data-tb',tt?(a.getAttribute('data-tbox')||''):'');bxl.setAttribute('data-lb',a.getAttribute('data-lbox')||'');bxl.setAttribute('data-tlb',a.getAttribute('data-tlbox')||'');dtx.setAttribute('data-low',a.getAttribute('data-low')||'');bxl.style.display='none';im.onload=im.onerror=function(){placeDet();schedule();};im.src=a.href;
 setCap(i,a.getAttribute('data-cap')||'');
 prev.disabled=i<=0;next.disabled=i>=list.length-1;
 if(list[i+1]){(new Image()).src=list[i+1].href;}}
@@ -299,6 +299,7 @@ align-items:center;justify-content:center;flex-direction:column;color:#fff}
 #lb .stage,#lb img{touch-action:none}
 #lbb{position:fixed;display:none;pointer-events:none;z-index:1}
 #lbbx{background:none;border:1px solid #fff;color:#fff;border-radius:4px;padding:3px 10px;cursor:pointer;margin:0 8px 0 0;font-size:13px}
+#lbd .lo{color:#c4c4c4;font-weight:500}.lo{color:#8a8a8a;font-weight:500}
 #lbd{white-space:pre-line;position:fixed;display:none;background:rgba(0,0,0,.65);color:#fff;font-size:14px;font-weight:600;padding:3px 10px;border-radius:4px;pointer-events:none;z-index:2}
 #lb img{max-width:calc(100vw - 150px);max-height:100%;border-radius:6px;
 transform-origin:center center;-webkit-touch-callout:none;-webkit-user-drag:none}
@@ -550,15 +551,61 @@ def test_boxes(row):
     return (row["test_boxes"] or "") if test_active(row) else ""
 
 
+def low_items(row, pre="det"):
+    """[(Name, Sicherheit)] der Klassen, die ein Modell bei diesem Favoriten nur unter der Schwelle gesehen hat (sonst leer)."""
+    keys = row.keys()
+    if "fav" not in keys or not row["fav"] or pre + "_low" not in keys or not row[pre + "_low"]:
+        return []
+    if pre == "test" and not test_active(row):
+        return []
+    have = {n for n, _c in det_items(row, pre)}
+    out = []
+    for part in row[pre + "_low"].split(","):
+        name, _, val = part.partition(":")
+        try:
+            if name in DET_BADGES and name not in have:
+                out.append((name, float(val)))
+        except ValueError:
+            pass
+    return sorted(out, key=lambda x: _detect.ORDER.index(x[0]) if x[0] in _detect.ORDER else 9)
+
+
+def low_text(row, pre="det"):
+    """\"Tier 18 %, Mensch 12 %\" fuer die Klassen unter der Schwelle (leer, wenn keine)."""
+    return ", ".join("%s %d %%" % (DET_BADGES[n][0], round(c * 100)) for n, c in low_items(row, pre))
+
+
+def low_boxes(row, pre="det"):
+    """Rahmen der Erkennungen unter der Schwelle fuers data-Attribut (nur Klassen, die nicht gemeldet wurden)."""
+    names = {n for n, _c in low_items(row, pre)}
+    if not names:
+        return ""
+    raw = row[pre + "_lowb"] if pre + "_lowb" in row.keys() else ""
+    return ";".join(p for p in (raw or "").split(";") if p.split(":")[0] in names)
+
+
+def low_popup(row):
+    """Text fuer die grauen Zeilen im grossen Bild."""
+    a, b = low_text(row, "det"), low_text(row, "test")
+    if a and b:
+        return "Bisher unter Schwelle: %s\nTest unter Schwelle: %s" % (a, b)
+    if a:
+        return ("Bisher " if test_active(row) else "") + "unter Schwelle: " + a
+    if b:
+        return "Test unter Schwelle: " + b
+    return ""
+
+
 def zoom_attrs(row, caption):
     """data-Attribute eines Foto-Links fuers grosse Bild (Beschriftung, Erkennung, Stern, Testmodell)."""
     keys = row.keys()
     st = STATUS.get(row["status"], (row["status"], ""))[0] if "status" in keys else ""
     return ('data-cap="%s" data-det="%s" data-box="%s" data-id="%d" data-fav="%d" data-test="%s" data-tbox="%s"'
-            ' data-st="%s" data-sk="%s" data-lbl="%s"'
+            ' data-st="%s" data-sk="%s" data-lbl="%s" data-low="%s" data-lbox="%s" data-tlbox="%s"'
             % (e(caption), e(det_text(row)), e(det_boxes(row)), row["id"],
                1 if "fav" in keys and row["fav"] else 0, e(test_text(row)), e(test_boxes(row)),
-               e(st), e(row["status"] if "status" in keys else ""), e(row["lbl"] if "lbl" in keys and row["lbl"] else "")))
+               e(st), e(row["status"] if "status" in keys else ""), e(row["lbl"] if "lbl" in keys and row["lbl"] else ""),
+               e(low_popup(row)), e(low_boxes(row, "det")), e(low_boxes(row, "test"))))
 
 
 def det_boxes(row):
@@ -850,9 +897,9 @@ class Board:
             req.send_header("Content-Length", "0")
             req.end_headers()
             return
-        match = re.fullmatch(r"/api/model-(promote|delete-test|rollback|builtin|recheck|recheck-cancel|favtest|favtest-cancel)", path)
+        match = re.fullmatch(r"/api/model-(promote|delete-test|rollback|builtin|recheck|recheck-cancel|recheck-fav|favtest|favtest-cancel|thresholds)", path)
         if match:
-            message = self._model_action(match.group(1))
+            message = self._model_action(match.group(1), form)
             req.send_response(303)
             req.send_header("Location", self._ingress(req) + "/models?m=" + quote(message, safe=""))
             req.send_header("Content-Length", "0")
@@ -1579,7 +1626,7 @@ class Board:
 
     # -- Modelle ----------------------------------------------------------
 
-    def _model_action(self, name):
+    def _model_action(self, name, form=None):
         """Knoepfe im Reiter Modelle. Gibt die Meldung fuer die Anzeige zurueck."""
         d = self.detector
         if d is None:
@@ -1590,6 +1637,24 @@ class Board:
                     return "Die Neu-Pr\u00fcfung l\u00e4uft bereits."
                 n = d.recheck_start()
                 return "Bestand wird neu gepr\u00fcft (%d Fotos)." % n if n else "Keine Fotos im Bestand."
+            if name == "recheck-fav":
+                if d.recheck["active"]:
+                    return "Die Neu-Pr\u00fcfung l\u00e4uft bereits."
+                n = d.recheck_start(favorites_only=True)
+                return "Favoriten werden mit dem produktiven Modell gepr\u00fcft (%d Fotos)." % n if n else "Keine Favoriten mit Foto vorhanden."
+            if name == "thresholds":
+                which = (form or {}).get("which", [""])[0]
+                if which not in ("det", "test"):
+                    return "Unbekanntes Modell."
+                try:
+                    th = {k: int((form or {}).get(k, [""])[0]) / 100.0 for k in ("tier", "mensch", "fahrzeug")}
+                except ValueError:
+                    return "Schwellen: bitte ganze Zahlen von 10 bis 95 eingeben."
+                if any(v < 0.10 or v > 0.95 for v in th.values()):
+                    return "Schwellen: nur Werte von 10 bis 95 sind m\u00f6glich."
+                if not d.set_thresholds(which, th):
+                    return "Kein Testmodell vorhanden."
+                return "Schwellen gespeichert (%s)." % ("Produktivmodell" if which == "det" else "Testmodell")
             if name == "recheck-cancel":
                 d.recheck_cancel()
                 return "Neu-Pr\u00fcfung wird abgebrochen."
@@ -1901,13 +1966,17 @@ class Board:
                         '<button>Auf eingebautes Modell zur&uuml;ck</button></form>')
         favs = self.store.gallery_rows(fav=True, limit=2000)
         prod_html = ('<h2>Produktives Modell</h2><p><span class="mname">%s</span><br><span id="sp" class="small">%s</span><br>'
-                     '<span class="small">Dieses Modell wertet alle neuen Mails aus. Hauptordner: <code>%s</code></span></p>%s'
-                     % (prod, self._model_line(st, favs, "det"), e(_detect.MODEL_DIR), '<p>%s</p>' % buttons if buttons else ""))
+                     '<span class="small">Dieses Modell wertet alle neuen Mails aus. Hauptordner: <code>%s</code></span></p>%s%s%s'
+                     % (prod, self._model_line(st, favs, "det"), e(_detect.MODEL_DIR), self._thr_form(st, "det"),
+                        '<form method="post" action="api/model-recheck-fav" style="margin:6px 0"><button>Favoriten mit diesem Modell neu pr&uuml;fen</button> '
+                        '<span class="small">(speichert auch die Werte unter der Schwelle)</span></form>',
+                        '<p>%s</p>' % buttons if buttons else ""))
         # Testmodell
         if st["test_path"]:
             state = '<br><span class="badge red">Fehler: %s</span>' % e(st["test_error"]) if st["test_error"] else ""
             test_head = ('<p><span class="mname">%s</span> <span class="badge green">aktives Testmodell</span>%s<br><span id="stx" class="small">%s</span></p>'
                          % (e(os.path.basename(st["test_path"])), state, self._model_line(st, favs, "test")))
+            test_head += self._thr_form(st, "test")
             test_btns = ('<p><form method="post" action="api/model-promote" style="display:inline" '
                          'onsubmit="return confirm(\'Das Testmodell wird produktiv. Das bisherige kommt in den Ordner vorher. Fortfahren?\')">'
                          '<button>Test in Produktion setzen</button></form> '
@@ -2077,6 +2146,18 @@ setTimeout(tick,2000);})();</script>"""
             parts.append("&uuml;bersehen: " + names(v[2]))
         return ' <b class="diff">&#10007; %s</b>' % "; ".join(parts)
 
+    def _thr_form(self, st, which):
+        """Schwellen eines Modells (Tier, Mensch, Fahrzeug in %) einstellen."""
+        tag = st["prod_tag"] if which == "det" else st["test_tag"]
+        th = _detect.thresholds_for(tag, self.detector.thresholds if self.detector is not None else None)
+        own = _detect.has_own_thresholds(tag)
+        inputs = "".join('%s <input type="number" name="%s" min="10" max="95" step="1" value="%d" style="width:60px"> %% '
+                         % (lab, key, round(th[key] * 100))
+                         for key, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug")))
+        return ('<form method="post" action="api/model-thresholds" style="margin:6px 0"><input type="hidden" name="which" value="%s">'
+                'Schwellen: %s<button>Speichern</button> <span class="small">%s</span></form>'
+                % (which, inputs, "eigene Einstellung f&uuml;r dieses Modell" if own else "Standard aus der Add-on-Konfiguration"))
+
     def _tally(self, favs, pre):
         """Vergleich eines Modells mit den eigenen Labels: (ausgewertet, richtig, mit Fehlalarm, mit Uebersehenem)."""
         n = ok_n = fp_n = miss_n = 0
@@ -2173,7 +2254,9 @@ setTimeout(tick,2000);})();</script>"""
             now_txt = det_text(r).replace("\n", ", ") or "-"
             if r["det_ms"]:
                 now_txt += " \u00b7 " + self._sec(r["det_ms"])
-            line1 = '<div class="d%s">Bisher: %s%s</div>' % (" diff" if v_det is not None and not v_det[0] else "", e(now_txt), self._verdict_html(v_det))
+            lo1 = low_text(r, "det")
+            lo1 = ' <span class="lo">&middot; unter Schwelle: %s</span>' % e(lo1) if lo1 else ""
+            line1 = '<div class="d%s">Bisher: %s%s%s</div>' % (" diff" if v_det is not None and not v_det[0] else "", e(now_txt), lo1, self._verdict_html(v_det))
             if active:
                 test_txt = test_text(r).replace("\n", ", ")
                 if r["test_ms"]:
@@ -2182,7 +2265,9 @@ setTimeout(tick,2000);})();</script>"""
                     mark = " diff" if (v_test is not None and not v_test[0]) else ""
                 else:
                     mark = "" if same else " diff"
-                line2 = '<div class="d%s">Test: %s%s</div>' % (mark, e(test_txt), self._verdict_html(v_test))
+                lo2 = low_text(r, "test")
+                lo2 = ' <span class="lo">&middot; unter Schwelle: %s</span>' % e(lo2) if lo2 else ""
+                line2 = '<div class="d%s">Test: %s%s%s</div>' % (mark, e(test_txt), lo2, self._verdict_html(v_test))
             elif st["test_path"]:
                 line2 = '<div class="d">Test: wird gepr&uuml;ft &hellip;</div>'
             else:
