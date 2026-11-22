@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from email.parser import BytesParser
 
 import detect as _detect
+import tune as _tune
 from store import DET_FILTERS, FILTERS, PREVIEW_TYPE, CameraError, placeholder_name
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -512,8 +513,37 @@ DET_OPTIONS = (("", "alle Fotos"), ("erkannt", "irgendeine Erkennung"), ("tier",
                ("offen", "noch nicht gepr\u00fcft"))
 
 
-def det_items(row, pre="det"):
-    """[(Etikett, Sicherheit)] in Anzeige-Reihenfolge; leer, wenn nichts erkannt oder noch nicht geprueft."""
+def sim_ok(row, pre="det"):
+    """Gibt es bei diesem Favoriten gemerkte Werte (auch unter der Schwelle) zum aktuellen Modell? Dann laesst sich mit
+    beliebigen Schwellen nachrechnen, was gemeldet worden waere."""
+    keys = row.keys()
+    if "fav" not in keys or not row["fav"] or pre + "_low" not in keys or not row[pre + "_low"]:
+        return False
+    if pre == "test":
+        return test_active(row)
+    return "det_model" in keys and row["det_model"] == _detect.MODEL_TAG
+
+
+def sim_items(row, pre="det"):
+    """[(Etikett, Sicherheit)] bei den *aktuell eingestellten* Schwellen des Modells (aus den gemerkten Werten)."""
+    th = _detect.thresholds_for(_detect.MODEL_TAG if pre == "det" else _detect.TEST_TAG)
+    out = []
+    for part in row[pre + "_low"].split(","):
+        name, _, val = part.partition(":")
+        try:
+            c = float(val)
+        except ValueError:
+            continue
+        if name in th and round(c * 100) >= round(th[name] * 100):
+            out.append((name, c))
+    return sorted(out, key=lambda x: _detect.ORDER.index(x[0]))
+
+
+def det_items(row, pre="det", sim=False):
+    """[(Etikett, Sicherheit)] in Anzeige-Reihenfolge; leer, wenn nichts erkannt oder noch nicht geprueft.
+    sim=True: bei Favoriten mit gemerkten Werten nach den aktuell eingestellten Schwellen statt nach dem damaligen Lauf."""
+    if sim and sim_ok(row, pre):
+        return sim_items(row, pre)
     keys = row.keys()
     label = row[pre + "_label"] if pre + "_label" in keys else ""
     if not label or label in ("leer", "fehler"):
@@ -538,27 +568,43 @@ def test_active(row):
                 and row["test_model"] == _detect.TEST_TAG and row["test_label"])
 
 
-def test_text(row):
+def test_text(row, sim=False):
     if not test_active(row):
         return ""
-    items = det_items(row, "test")
+    items = det_items(row, "test", sim)
     if items:
         return "\n".join("%s %d %%" % (DET_BADGES[n][0], round(c * 100)) if c else DET_BADGES[n][0] for n, c in items)
-    return "Nichts erkannt" if row["test_label"] == "leer" else "nicht auswertbar"
+    return "Nichts erkannt" if (row["test_label"] == "leer" or (sim and sim_ok(row, "test"))) else "nicht auswertbar"
 
 
-def test_boxes(row):
-    return (row["test_boxes"] or "") if test_active(row) else ""
+def _boxes_for(row, pre, sim):
+    """Rahmen der gemeldeten Klassen. Bei sim: nur Klassen, die bei den aktuellen Schwellen gemeldet wuerden; fehlt der Rahmen
+    aus dem damaligen Lauf (Klasse lag damals unter der Schwelle), kommt der gemerkte beste Rahmen."""
+    keys = row.keys()
+    raw = (row[pre + "_boxes"] if pre + "_boxes" in keys else "") or ""
+    if not (sim and sim_ok(row, pre)):
+        return raw
+    names = {n for n, _c in sim_items(row, pre)}
+    parts = [p for p in raw.split(";") if p and p.split(":")[0] in names]
+    have = {p.split(":")[0] for p in parts}
+    for p in (row[pre + "_lowb"] or "").split(";"):
+        if p and p.split(":")[0] in names and p.split(":")[0] not in have:
+            parts.append(p)
+    return ";".join(parts)
 
 
-def low_items(row, pre="det"):
+def test_boxes(row, sim=False):
+    return _boxes_for(row, "test", sim) if test_active(row) else ""
+
+
+def low_items(row, pre="det", sim=False):
     """[(Name, Sicherheit)] der Klassen, die ein Modell bei diesem Favoriten nur unter der Schwelle gesehen hat (sonst leer)."""
     keys = row.keys()
     if "fav" not in keys or not row["fav"] or pre + "_low" not in keys or not row[pre + "_low"]:
         return []
     if pre == "test" and not test_active(row):
         return []
-    have = {n for n, _c in det_items(row, pre)}
+    have = {n for n, _c in det_items(row, pre, sim)}
     out = []
     for part in row[pre + "_low"].split(","):
         name, _, val = part.partition(":")
@@ -570,23 +616,23 @@ def low_items(row, pre="det"):
     return sorted(out, key=lambda x: _detect.ORDER.index(x[0]) if x[0] in _detect.ORDER else 9)
 
 
-def low_text(row, pre="det"):
+def low_text(row, pre="det", sim=False):
     """\"Tier 18 %, Mensch 12 %\" fuer die Klassen unter der Schwelle (leer, wenn keine)."""
-    return ", ".join("%s %d %%" % (DET_BADGES[n][0], round(c * 100)) for n, c in low_items(row, pre))
+    return ", ".join("%s %d %%" % (DET_BADGES[n][0], round(c * 100)) for n, c in low_items(row, pre, sim))
 
 
-def low_boxes(row, pre="det"):
+def low_boxes(row, pre="det", sim=False):
     """Rahmen der Erkennungen unter der Schwelle fuers data-Attribut (nur Klassen, die nicht gemeldet wurden)."""
-    names = {n for n, _c in low_items(row, pre)}
+    names = {n for n, _c in low_items(row, pre, sim)}
     if not names:
         return ""
     raw = row[pre + "_lowb"] if pre + "_lowb" in row.keys() else ""
     return ";".join(p for p in (raw or "").split(";") if p.split(":")[0] in names)
 
 
-def low_popup(row):
+def low_popup(row, sim=False):
     """Text fuer die grauen Zeilen im grossen Bild."""
-    a, b = low_text(row, "det"), low_text(row, "test")
+    a, b = low_text(row, "det", sim), low_text(row, "test", sim)
     if a and b:
         return "Bisher unter Schwelle: %s\nTest unter Schwelle: %s" % (a, b)
     if a:
@@ -596,31 +642,31 @@ def low_popup(row):
     return ""
 
 
-def zoom_attrs(row, caption):
+def zoom_attrs(row, caption, sim=False):
     """data-Attribute eines Foto-Links fuers grosse Bild (Beschriftung, Erkennung, Stern, Testmodell)."""
     keys = row.keys()
     st = STATUS.get(row["status"], (row["status"], ""))[0] if "status" in keys else ""
     return ('data-cap="%s" data-det="%s" data-box="%s" data-id="%d" data-fav="%d" data-test="%s" data-tbox="%s"'
             ' data-st="%s" data-sk="%s" data-lbl="%s" data-low="%s" data-lbox="%s" data-tlbox="%s"'
-            % (e(caption), e(det_text(row)), e(det_boxes(row)), row["id"],
-               1 if "fav" in keys and row["fav"] else 0, e(test_text(row)), e(test_boxes(row)),
+            % (e(caption), e(det_text(row, sim)), e(det_boxes(row, sim)), row["id"],
+               1 if "fav" in keys and row["fav"] else 0, e(test_text(row, sim)), e(test_boxes(row, sim)),
                e(st), e(row["status"] if "status" in keys else ""), e(row["lbl"] if "lbl" in keys and row["lbl"] else ""),
-               e(low_popup(row)), e(low_boxes(row, "det")), e(low_boxes(row, "test"))))
+               e(low_popup(row, sim)), e(low_boxes(row, "det", sim)), e(low_boxes(row, "test", sim))))
 
 
-def det_boxes(row):
+def det_boxes(row, sim=False):
     """Rahmen fuers Vorschaubild als Text fuers data-Attribut (leer, wenn es keine gibt)."""
-    return (row["det_boxes"] if "det_boxes" in row.keys() else "") or ""
+    return _boxes_for(row, "det", sim)
 
 
-def det_text(row):
+def det_text(row, sim=False):
     """Kurztext fuer die Einblendung links oben im Bild."""
-    items = det_items(row)
+    items = det_items(row, "det", sim)
     if items:
         return "\n".join("%s %d %%" % (DET_BADGES[n][0], round(c * 100)) if c else DET_BADGES[n][0]
                          for n, c in items)
     label = row["det_label"] if "det_label" in row.keys() else ""
-    return "Nichts erkannt" if label == "leer" else ""
+    return "Nichts erkannt" if (label == "leer" or (sim and sim_ok(row, "det"))) else ""
 
 
 def status_badge(row):
@@ -746,7 +792,8 @@ class Board:
                 return self._send(
                     req, 200,
                     self.render_models(self._ingress(req) + "/", (query.get("m") or [""])[0][:200],
-                                       (query.get("d") or [""])[0] == "1", (query.get("frag") or [""])[0]),
+                                       (query.get("d") or [""])[0] == "1", (query.get("frag") or [""])[0],
+                                       self._flt(query)),
                     extra={"Cache-Control": "no-store"},
                 )
             if path == "/reviere":
@@ -1920,7 +1967,49 @@ class Board:
                 "(Schnitt der letzten 7 Tage) mal Zeit pro Foto. Der Arbeitsspeicher ist der des ganzen Add-ons, daher ungef&auml;hr; "
                 "Messungen vor 1.1.3 fehlen.</p>" % ("".join(trs), note, e(str(st["threads"])), per_day))
 
-    def render_models(self, base, message="", only_diff=False, frag=""):
+    FLT_MODELS = (("det", "Produktiv"), ("test", "Test"))
+    FLT_ARTS = (("fp", "Fehlalarm"), ("miss", "\u00dcbersehen"), ("ok", "Richtig"))
+    FLT_CLASSES = (("mensch", "Mensch"), ("tier", "Tier"), ("fahrzeug", "Fahrzeug"))
+
+    @classmethod
+    def _flt(cls, query):
+        """Filter der Kontrolle aus der Adresse: Modell (fm), Art (fa), Klasse (fk); Unbekanntes wird ignoriert."""
+        def pick(key, options):
+            v = (query.get(key) or [""])[0]
+            return v if v in dict(options) else ""
+        return {"m": pick("fm", cls.FLT_MODELS), "a": pick("fa", cls.FLT_ARTS), "k": pick("fk", cls.FLT_CLASSES)}
+
+    @staticmethod
+    def _flt_q(flt):
+        return "".join("&%s=%s" % (k, flt[v]) for k, v in (("fm", "m"), ("fa", "a"), ("fk", "k")) if flt and flt.get(v))
+
+    @staticmethod
+    def _flt_match(flt, truth, v_det, v_test):
+        """Passt die Kachel zum Filter? Art und Klasse beurteilen nur Fotos mit eigenem Label."""
+        if not (flt["a"] or flt["k"]):
+            return True
+        if truth is None:
+            return False
+        for which in ([flt["m"]] if flt["m"] else ["det", "test"]):
+            v = v_det if which == "det" else v_test
+            if v is None:
+                continue
+            ok, fp, miss = v
+            k, a = flt["k"], flt["a"]
+            if a == "fp":
+                hit = (k in fp) if k else bool(fp)
+            elif a == "miss":
+                hit = (k in miss) if k else bool(miss)
+            elif a == "ok":
+                hit = ok and (not k or k in truth)
+            else:
+                hit = k in fp or k in miss
+            if hit:
+                return True
+        return False
+
+    def render_models(self, base, message="", only_diff=False, frag="", flt=None):
+        flt = flt or {"m": "", "a": "", "k": ""}
         d = self.detector
         st = d.status() if d is not None else None
         if frag:   # Teilstuecke fuer die Live-Aktualisierung im Browser
@@ -1931,7 +2020,7 @@ class Board:
                 return self._favtest_block(st, favs)
             if frag == "mstat":
                 return self._model_line(st, favs, "det") + "<!--sep-->" + (self._model_line(st, favs, "test") if st["test_path"] else "")
-            return self._perf_block(st) + self._control_html(st, favs, only_diff)
+            return self._perf_block(st) + self._control_html(st, favs, only_diff, flt)
         try:
             os.makedirs(_detect.TEST_DIR, exist_ok=True)   # Ordner anlegen, damit man ihn per Samba findet
         except OSError:
@@ -2004,7 +2093,8 @@ class Board:
                        '<p class="small">Wertet alle Fotos mit dem produktiven Modell neu aus (etwa eine Sekunde pro Foto, niedrige Priorit&auml;t). '
                        "Das passiert nie von selbst.%s</p>" % fin)
         recheck_block = "<h2>Bestand neu pr&uuml;fen</h2>" + recheck
-        live = '<div id="live" data-d="%d">%s%s</div>' % (1 if only_diff else 0, self._perf_block(st), self._control_html(st, favs, only_diff))
+        live = '<div id="live" data-d="%s">%s%s</div>' % (e(("1" if only_diff else "0") + self._flt_q(flt)), self._perf_block(st),
+                                                          self._control_html(st, favs, only_diff, flt))
         script = """<script>(function(){var b=document.getElementById('mup'),f=document.getElementById('mfile'),s=document.getElementById('mstat');
 var CH=10*1048576,pw=document.getElementById('progw'),lv=document.getElementById('live');
 function get(u,cb){var x=new XMLHttpRequest();x.open('GET',u);x.onload=function(){if(x.status===200)cb(x.responseText);};x.send();}
@@ -2032,7 +2122,7 @@ get('api/model-upload-state?id='+uid,function(t){var r={};try{r=JSON.parse(t);}c
 if(got>=tot)got=0;if(got)line('Setze fort bei '+Math.round(got*100/tot)+' % \u2026',Math.round(got*100/tot));send(got);});};}
 if(!pw||!lv)return;
 function refreshStat(){get('models?frag=mstat',function(h){var p=h.split('<!--sep-->'),a=document.getElementById('sp'),c=document.getElementById('stx');if(a)a.innerHTML=p[0];if(c&&p[1])c.innerHTML=p[1];});}
-function refreshLive(){get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;});refreshStat();}
+function refreshLive(){get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;if(window.simAll)window.simAll();});refreshStat();}
 window.onLbClose=function(){if(window.lblDirty){window.lblDirty=false;refreshLive();}};
 lv.addEventListener('click',function(ev){var bt=ev.target.closest&&ev.target.closest('.lrow button');if(!bt)return;
 var row=bt.parentNode,n=bt.getAttribute('data-n'),s=(row.getAttribute('data-lbl')||'').split(',').filter(Boolean),i=s.indexOf(n);
@@ -2049,7 +2139,23 @@ pw.innerHTML=h;
 if(m&&m[1]!==sig){sig=m[1];refreshLive();}
 setTimeout(tick,act?2000:5000);});}
 setTimeout(tick,2000);})();</script>"""
-        return self._models_shell(base, note + warn + prod_html + recheck_block + test_block + live + LIGHTBOX + script, refresh)
+        sim_script = """<script>(function(){
+var NAMES=['tier','mensch','fahrzeug'],LAB={tier:'Tier',mensch:'Mensch',fahrzeug:'Fahrzeug'};
+function data(){var el=document.getElementById('simdata');if(!el)return {};try{return JSON.parse(el.getAttribute('data-j')||'{}');}catch(e){return {};}}
+function simAll(){var D=data();[].forEach.call(document.querySelectorAll('.simout'),function(out){var w=out.getAttribute('data-w'),form=out.parentNode,d=D[w];
+if(!d||!d.n){out.innerHTML='Noch keine Werte zum Nachrechnen: Favoriten labeln und mit diesem Modell pr\u00fcfen.';return;}
+var thr={},i;for(i=0;i<3;i++){var inp=form.querySelector('input[name='+NAMES[i]+']');thr[NAMES[i]]=parseInt(inp.value,10)||0;}
+var parts=[],right=0,k;
+d.s.forEach(function(r){var ok=true;for(k=0;k<3;k++){if(((r[3+k]>=thr[NAMES[k]])?1:0)!==r[k])ok=false;}if(ok)right++;});
+for(k=0;k<3;k++){var fp=0,ms=0;d.s.forEach(function(r){var f=r[3+k]>=thr[NAMES[k]];if(f&&!r[k])fp++;else if(r[k]&&!f)ms++;});
+parts.push(LAB[NAMES[k]]+': Fehlalarm <b>'+fp+'</b> \u00b7 \u00fcbersehen <b>'+ms+'</b>');}
+var rec=d.r||{};var same=NAMES.every(function(n){return rec[n]===thr[n];});
+out.innerHTML=parts.join('<br>')+'<br><b>'+right+' von '+d.n+'</b> Fotos richtig (bei diesen Schwellen, noch nicht gespeichert)<br>Empfehlung: '+NAMES.map(function(n){return LAB[n]+' '+rec[n]+' %';}).join(', ')+(same?'':' <button type="button" class="recbtn">Empfehlung eintragen</button>');
+var b=out.querySelector('.recbtn');if(b)b.onclick=function(){NAMES.forEach(function(n){form.querySelector('input[name='+n+']').value=rec[n];});simAll();};});}
+window.simAll=simAll;
+document.addEventListener('input',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('.simout')===null&&ev.target.closest('form[action$="model-thresholds"]'))simAll();});
+simAll();})();</script>"""
+        return self._models_shell(base, note + warn + prod_html + recheck_block + test_block + live + LIGHTBOX + script + sim_script, refresh)
 
     def _tile_src(self, r):
         if self.store.preview_path(r["id"]):
@@ -2119,6 +2225,8 @@ setTimeout(tick,2000);})();</script>"""
         """Was ein Modell gemeldet hat, als Menge; None, wenn es kein (brauchbares) Ergebnis gibt."""
         if pre == "test" and not test_active(row):
             return None
+        if sim_ok(row, pre):   # Favorit mit gemerkten Werten: nach den aktuell eingestellten Schwellen
+            return {n for n, _c in sim_items(row, pre)}
         label = row[pre + "_label"] if pre + "_label" in row.keys() else ""
         if not label or label == "fehler":
             return None
@@ -2155,8 +2263,8 @@ setTimeout(tick,2000);})();</script>"""
                          % (lab, key, round(th[key] * 100))
                          for key, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug")))
         return ('<form method="post" action="api/model-thresholds" style="margin:6px 0"><input type="hidden" name="which" value="%s">'
-                'Schwellen: %s<button>Speichern</button> <span class="small">%s</span></form>'
-                % (which, inputs, "eigene Einstellung f&uuml;r dieses Modell" if own else "Standard aus der Add-on-Konfiguration"))
+                'Schwellen: %s<button>Speichern</button> <span class="small">%s</span><div class="simout small" data-w="%s"></div></form>'
+                % (which, inputs, "eigene Einstellung f&uuml;r dieses Modell" if own else "Standard aus der Add-on-Konfiguration", which))
 
     def _tally(self, favs, pre):
         """Vergleich eines Modells mit den eigenen Labels: (ausgewertet, richtig, mit Fehlalarm, mit Uebersehenem)."""
@@ -2224,17 +2332,18 @@ setTimeout(tick,2000);})();</script>"""
                    "&bdquo;Leer&ldquo; sind.")
         return '<p class="small"><b>Gegen deine Labels</b> (%d von %d Favoriten gelabelt): %s.%s</p>' % (len(labeled), len(favs), " &middot; ".join(parts), tip)
 
-    def _control_html(self, st, favs, only_diff):
+    def _control_html(self, st, favs, only_diff, flt=None):
         """Kontrolle Favoriten: Kacheln mit Ergebnis von bisher und Test, eigenes Label und Abweichungen davon."""
+        flt = flt or {"m": "", "a": "", "k": ""}
         cams = self.store.camera_map()
-        tiles, n_test, n_same = [], 0, 0
+        tiles, n_test, n_same, n_shown = [], 0, 0, 0
         for r in favs:
             mail_id = r["id"]
             src = self._tile_src(r)
             if not src:
                 continue
             active = test_active(r)
-            same = active and r["det_label"] == r["test_label"]
+            same = active and ({n for n, _c in det_items(r, "det", True)} == {n for n, _c in det_items(r, "test", True)})
             if active:
                 n_test += 1
                 n_same += 1 if same else 0
@@ -2247,25 +2356,28 @@ setTimeout(tick,2000);})();</script>"""
                 bad = active and not same
             if only_diff and not bad:
                 continue
+            if not self._flt_match(flt, truth, v_det, v_test):
+                continue
+            n_shown += 1
             cam = cams.get(r["camera"])
             title = self._cam_title(cam["revier"], cam["name"]) if cam else ""
             title = title or (r["camera"] or "").split("@")[0] or "Kamera"
             cap = "%s  -  %s" % (title, time.strftime("%d.%m.%y %H:%M:%S", time.localtime(r["received"])))
-            now_txt = det_text(r).replace("\n", ", ") or "-"
+            now_txt = det_text(r, True).replace("\n", ", ") or "-"
             if r["det_ms"]:
                 now_txt += " \u00b7 " + self._sec(r["det_ms"])
-            lo1 = low_text(r, "det")
+            lo1 = low_text(r, "det", True)
             lo1 = ' <span class="lo">&middot; unter Schwelle: %s</span>' % e(lo1) if lo1 else ""
             line1 = '<div class="d%s">Bisher: %s%s%s</div>' % (" diff" if v_det is not None and not v_det[0] else "", e(now_txt), lo1, self._verdict_html(v_det))
             if active:
-                test_txt = test_text(r).replace("\n", ", ")
+                test_txt = test_text(r, True).replace("\n", ", ")
                 if r["test_ms"]:
                     test_txt += " \u00b7 " + self._sec(r["test_ms"])
                 if truth is not None:
                     mark = " diff" if (v_test is not None and not v_test[0]) else ""
                 else:
                     mark = "" if same else " diff"
-                lo2 = low_text(r, "test")
+                lo2 = low_text(r, "test", True)
                 lo2 = ' <span class="lo">&middot; unter Schwelle: %s</span>' % e(lo2) if lo2 else ""
                 line2 = '<div class="d%s">Test: %s%s%s</div>' % (mark, e(test_txt), lo2, self._verdict_html(v_test))
             elif st["test_path"]:
@@ -2279,15 +2391,89 @@ setTimeout(tick,2000);})();</script>"""
             tiles.append(
                 '<div class="gc%s"><a href="%s" class="zoom" %s><img loading="lazy" src="%s" alt=""><span class="fv">&#9733;</span></a>'
                 '<div class="t">%s</div>%s%s<div class="lrow" data-id="%d" data-lbl="%s">%s</div></div>'
-                % (" diffc" if bad else "", src, zoom_attrs(r, cap), src, e(title), line1, line2, mail_id, e(cur), btns))
+                % (" diffc" if bad else "", src, zoom_attrs(r, cap, True), src, e(title), line1, line2, mail_id, e(cur), btns))
         if st["test_path"]:
             summary = "%d Favoriten, %d mit Testergebnis, %d gleich, %d abweichend" % (len(favs), n_test, n_same, n_test - n_same)
         else:
             summary = "%d Favoriten (noch kein Testmodell)" % len(favs)
-        toggle = '<a href="models?d=%d">%s</a>' % (0 if only_diff else 1, "alle anzeigen" if only_diff else "nur Abweichungen")
-        return ('<h2>Kontrolle: Favoriten</h2>%s<p class="small">%s %s</p><div class="grid">%s</div>'
-                % (self._label_summary(st, favs), e(summary), toggle,
-                   "".join(tiles) or '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'))
+        toggle = '<a href="models?d=%d%s">%s</a>' % (0 if only_diff else 1, self._flt_q(flt), "alle anzeigen" if only_diff else "nur Abweichungen")
+        filtered = bool(flt["m"] or flt["a"] or flt["k"])
+        shown = (" &middot; %d angezeigt" % n_shown) if (filtered or only_diff) else ""
+        tune_html, tune_json = self._tune_html(st, favs)
+        return ('<h2>Kontrolle: Favoriten</h2>%s%s<p class="small">%s%s %s</p>%s<div class="grid">%s</div>'
+                '<div id="simdata" hidden data-j="%s"></div>'
+                % (self._label_summary(st, favs), tune_html, e(summary), shown, toggle, self._filter_html(st, flt, only_diff),
+                   "".join(tiles) or ('<p class="small">Keine Fotos f&uuml;r diesen Filter.</p>' if (filtered or only_diff) and favs
+                                      else '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'),
+                   e(tune_json)))
+
+    def _filter_html(self, st, flt, only_diff):
+        """Filterzeile der Kontrolle: Modell, Art des Fehlers, Klasse (Antippen schaltet ein/aus)."""
+        def chip(key, val, label):
+            cur = dict(flt)
+            cur[key] = "" if flt[key] == val else val
+            href = "models?d=%d%s" % (1 if only_diff else 0, self._flt_q(cur))
+            return '<a class="chip%s" href="%s">%s</a>' % (" on" if flt[key] == val else "", e(href), label)
+        models = self.FLT_MODELS if st["test_path"] else self.FLT_MODELS[:1]
+        groups = [("Modell", "m", models), ("Art", "a", self.FLT_ARTS), ("Klasse", "k", self.FLT_CLASSES)]
+        rows = "".join('<span class="small">%s:</span> %s &nbsp; ' % (name, "".join(chip(key, v, lab) for v, lab in opts))
+                       for name, key, opts in groups)
+        return '<p class="flt">%s<span class="small">(Art und Klasse beurteilen nur Fotos mit deinem Label)</span></p>' % rows
+
+    def _tune_data(self, st, favs):
+        """Je Modell die Fotos mit Label und gemerkten Werten: Grundlage fuer Empfehlung und Simulation."""
+        out = {}
+        for pre in ("det", "test"):
+            if pre == "test" and not st["test_path"]:
+                continue
+            tag = st["prod_tag"] if pre == "det" else st["test_tag"]
+            cur = {k: round(v * 100) for k, v in _detect.thresholds_for(tag, self.detector.thresholds if self.detector else None).items()}
+            samples, labeled = [], 0
+            for r in favs:
+                truth = self._truth(r)
+                if truth is None or (pre == "test" and not test_active(r)):
+                    continue
+                labeled += 1
+                if sim_ok(r, pre):
+                    samples.append(_tune.sample(truth, r[pre + "_low"]))
+            rec = dict(cur)
+            for k, c in enumerate(_tune.CLASSES):
+                b = _tune.best(samples, k)
+                if b:
+                    rec[c] = b[0]
+            out[pre] = {"n": len(samples), "labeled": labeled, "samples": samples, "cur": cur, "rec": rec}
+        return out
+
+    def _tune_html(self, st, favs):
+        """Schwellen-Hilfe: Vergleich der Modelle bei aktuellen und bei den besten Schwellen (aus den eigenen Labels)."""
+        data = self._tune_data(st, favs)
+        rows = []
+        for pre, name in (("det", "Produktiv"), ("test", "Test")):
+            d = data.get(pre)
+            if not d:
+                continue
+            if not d["n"]:
+                rows.append('<tr><td>%s</td><td colspan="2" class="small">noch keine Werte (Favoriten neu pr&uuml;fen, Labels setzen)</td></tr>' % name)
+                continue
+            S = d["samples"]
+            cell = lambda thr: "<b>%d von %d</b> richtig &middot; Fehlalarm %d &middot; &uuml;bersehen %d" % (
+                (_tune.photos_right(S, thr), d["n"]) + _tune.total_cost(S, thr)[:2])
+            fmt = lambda thr: ", ".join("%s %d %%" % (lab, thr[k]) for k, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug")))
+            rows.append("<tr><td>%s</td><td>jetzt (%s):<br>%s</td><td>beste (%s):<br>%s</td></tr>"
+                        % (name, e(fmt(d["cur"])), cell(d["cur"]), e(fmt(d["rec"])), cell(d["rec"])))
+        js = {pre: {"n": d["n"], "s": [list(t) + list(c) for t, c in d["samples"]], "r": d["rec"]} for pre, d in data.items()}
+        if not rows:
+            return "", json.dumps(js, separators=(",", ":"))
+        note = ""
+        for pre, name in (("det", "Produktiv"), ("test", "Test")):
+            d = data.get(pre)
+            if d and d["labeled"] > d["n"]:
+                note += " F&uuml;r %d gelabelte Favoriten fehlen beim Modell &bdquo;%s&ldquo; die Werte (Favoriten neu pr&uuml;fen)." % (d["labeled"] - d["n"], name)
+        few = " Bei so wenigen Fotos ist die Empfehlung nur eine Orientierung." if any(d["n"] < 20 for d in data.values() if d["n"]) else ""
+        html_ = ('<table class="tune"><tr><th></th><th>aktuelle Schwellen</th><th>beste Schwellen nach deinen Labels</th></tr>%s</table>'
+                 '<p class="small">Gez&auml;hlt wird pro Foto; &uuml;bersehen z&auml;hlt doppelt so schwer wie ein Fehlalarm. '
+                 'Schwellen stellst du oben beim jeweiligen Modell ein; dort siehst du die Wirkung sofort.%s%s</p>' % ("".join(rows), note, few))
+        return html_, json.dumps(js, separators=(",", ":"))
 
     def _models_shell(self, base, body, refresh):
         return (
@@ -2295,6 +2481,10 @@ setTimeout(tick,2000);})();</script>"""
             '<meta name="viewport" content="width=device-width,initial-scale=1">%s'
             '<base href="%s"><title>Modelle</title><style>%s'
             ".diff{color:#d9822b;font-weight:700}.diffc{outline:2px solid #f5a524;border-radius:8px}"
+            ".chip{display:inline-block;padding:3px 10px;border:1px solid #b9c2cc;border-radius:14px;margin:2px 3px 2px 0;text-decoration:none;color:inherit;font-size:13px}"
+            ".chip.on{background:#6e9a35;color:#fff;border-color:#6e9a35}.flt{line-height:2}"
+            ".tune{border-collapse:collapse;margin:6px 0}.tune td,.tune th{border:1px solid #d5dbe1;padding:4px 8px;text-align:left;vertical-align:top;font-size:13px}"
+            ".simout{margin-top:4px;line-height:1.7}.simout button{margin-left:6px}"
             "h2{margin:22px 0 6px;font-size:17px}</style></head><body><h1>Modelle</h1>%s%s</body></html>"
             % (refresh, e(base), CSS, self._nav("models"), body)
         )

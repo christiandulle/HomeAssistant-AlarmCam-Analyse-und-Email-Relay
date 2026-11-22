@@ -40,14 +40,26 @@ def thr_key(tag):
     return tag or "eingebaut"
 
 
+_thr_cache = {"key": None, "data": {}}
+
+
 def _read_thr():
     import json
     try:
+        st = os.stat(THR_FILE)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    if _thr_cache["key"] == key:
+        return _thr_cache["data"]
+    try:
         with open(THR_FILE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
+        data = data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return {}
+        data = {}
+    _thr_cache["key"], _thr_cache["data"] = key, data
+    return data
 
 
 def thresholds_for(tag, default=None):

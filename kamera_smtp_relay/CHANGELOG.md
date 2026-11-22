@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.8
+
+- Kontrolle: **Filter** für Modell (Produktiv, Test), Art (Fehlalarm, Übersehen, Richtig) und Klasse (Mensch, Tier, Fahrzeug), jeweils antippen zum Ein- und Ausschalten und beliebig kombinierbar (z. B. „Produktiv, Fehlalarm, Tier“); Art und Klasse beurteilen nur Fotos mit deinem Label
+- Kontrolle: **Schwellen-Vergleich** je Modell nach deinen Labels: Fotos richtig, Fehlalarme und Übersehenes bei den aktuellen und bei den besten Schwellen (übersehen zählt doppelt so schwer wie ein Fehlalarm)
+- Modelle: Bei den Schwellen-Feldern rechnet das Board **sofort nach**, was bei den eingegebenen Werten gemeldet worden wäre (Fehlalarm und übersehen je Klasse, Fotos richtig), ohne zu speichern und ohne das Modell neu laufen zu lassen. „Empfehlung eintragen“ übernimmt die besten Schwellen in die Felder; gespeichert wird erst mit „Speichern“
+- Favoriten werden nach den aktuell eingestellten Schwellen angezeigt und bewertet (Kachel, großes Bild in der Kontrolle, „Gegen deine Labels“, Trefferquote), sobald für sie Werte unter der Schwelle gemerkt sind; das damals gespeicherte Ergebnis bleibt unverändert
+- Technik: neue Datei `tune.py` für die Rechnung
+
 ## 1.1.7
 
 - Erkennung merkt sich je Foto und Modell die **sicherste Erkennung jeder Klasse auch unter der Schwelle** (ab 10 %) samt Rahmen. Das passiert bei jeder Auswertung, die Anzeige gilt nur für Favoriten

@@ -13,7 +13,7 @@ Es gibt genau einen Port. Ob die Kamera mit SSL/TLS, mit STARTTLS oder
 unverschluesselt sendet, wird pro Verbindung automatisch erkannt.
 """
 
-VERSION = "1.1.7"
+VERSION = "1.1.8"
 
 import asyncio
 import hmac
