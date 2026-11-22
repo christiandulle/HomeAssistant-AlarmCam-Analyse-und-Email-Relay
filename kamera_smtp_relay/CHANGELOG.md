@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.6
+
+- Modelle: Jedes Modell (Produktiv, Test) zeigt unter dem hervorgehobenen Namen Dateigröße, Eingabegröße in Pixeln, durchschnittliche Zeit pro Foto und die **Trefferquote** auf deinen gelabelten Favoriten; die Werte aktualisieren sich während des Favoriten-Tests selbst
+- Modelle: Testmodell mit Kennzeichnung „aktives Testmodell“; Reihenfolge: Name, Upload, Fortschritt, darunter die Knöpfe „Test in Produktion setzen“ und „Testmodell löschen“ ganz unten
+- Modelle: Eine einzige Statuszeile ab dem Start eines Uploads: „Upload: Teil 1 von x“ mit Prozent, danach „Modell wird geprüft“, danach „Favoriten werden geprüft: Foto x von y“
+
 ## 1.1.5
 
 - Favoriten selbst labeln: im großen Bild (nur bei Favoriten) Knöpfe **Tier, Mensch, Fahrzeug, Leer** (mehrere wählbar, „Leer“ schließt die anderen aus; Tasten 1 bis 4) und dieselben Knöpfe unter jedem Foto in der Kontrolle

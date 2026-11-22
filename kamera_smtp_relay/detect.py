@@ -417,7 +417,7 @@ class DetectWorker(threading.Thread):
 
     def _remember(self, tag, detector):
         self.mem[tag] = {"threads": detector.threads, "load_mb": round(detector.load_mb),
-                         "peak_mb": round(detector.peak_mb)}
+                         "peak_mb": round(detector.peak_mb), "size": detector.size}
 
     def _analyse_all(self, detector, mail_id, images):
         merged, done, total, first_boxes, ms = {}, 0, 0, "", 0

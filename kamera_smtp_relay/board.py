@@ -314,6 +314,7 @@ font-size:44px;padding:10px 18px;cursor:pointer;opacity:.85;margin:0}
 .lrow button{font-size:12px;padding:3px 9px;border-radius:12px;border:1px solid var(--line,#8886);background:transparent;color:var(--fg);cursor:pointer;margin:0}
 .lrow button.on{background:#6e9a35;color:#fff;border-color:#6e9a35}
 .okm{color:#4fa65b;font-weight:700}
+.mname{font-size:18px;font-weight:700;color:#6e9a35}
 #lb .x{position:absolute;top:8px;right:16px;background:none;border:none;color:#fff;font-size:34px;
 cursor:pointer;margin:0}
 @media(max-width:700px){
@@ -1805,7 +1806,11 @@ class Board:
                 for old in _detect.list_models(_detect.TEST_DIR):
                     os.remove(old)
                 os.replace(part, os.path.join(_detect.TEST_DIR, name))
+                _detect.refresh()
                 self.detector.check()
+                t_end = time.time() + 3
+                while time.time() < t_end and self.detector.favtest["tag"] != _detect.TEST_TAG:
+                    time.sleep(0.05)   # damit die Seite nach dem Neuladen schon "prueft Foto ..." zeigt
                 log.info("Testmodell hochgeladen: %s (%s, in St\u00fccken)", name, fmt_size(total))
                 return reply(True, "Testmodell %s ist bereit, die Favoriten werden gepr\u00fcft." % name, done=True)
             except OSError as exc:
@@ -1859,6 +1864,8 @@ class Board:
             favs = self.store.gallery_rows(fav=True, limit=2000)
             if frag == "prog":
                 return self._favtest_block(st, favs)
+            if frag == "mstat":
+                return self._model_line(st, favs, "det") + "<!--sep-->" + (self._model_line(st, favs, "test") if st["test_path"] else "")
             return self._perf_block(st) + self._control_html(st, favs, only_diff)
         try:
             os.makedirs(_detect.TEST_DIR, exist_ok=True)   # Ordner anlegen, damit man ihn per Samba findet
@@ -1880,7 +1887,7 @@ class Board:
         if st["builtin"]:
             prod = "MegaDetector V6 (eingebaut)"
         else:
-            prod = e(info(st["prod_path"]))
+            prod = e(os.path.basename(st["prod_path"]))
         warn = "".join('<div class="banner">Nicht ladbar: %s &ndash; %s</div>' % (e(n), e(m)) for n, m in st["bad"])
         buttons = ""
         prev = _detect.list_models(_detect.PREV_DIR)
@@ -1892,30 +1899,28 @@ class Board:
             buttons += ('<form method="post" action="api/model-builtin" style="display:inline" '
                         'onsubmit="return confirm(\'Wieder das eingebaute Modell verwenden?\')">'
                         '<button>Auf eingebautes Modell zur&uuml;ck</button></form>')
-        prod_html = ("<h2>Produktives Modell</h2><p><b>%s</b> &middot; Eingabe %d px<br>"
-                     '<span class="small">Dieses Modell wertet alle neuen Mails aus. Hauptordner: <code>%s</code></span></p>%s'
-                     % (prod, st["size"], e(_detect.MODEL_DIR), '<p>%s</p>' % buttons if buttons else ""))
-        # Testmodell
         favs = self.store.gallery_rows(fav=True, limit=2000)
+        prod_html = ('<h2>Produktives Modell</h2><p><span class="mname">%s</span><br><span id="sp" class="small">%s</span><br>'
+                     '<span class="small">Dieses Modell wertet alle neuen Mails aus. Hauptordner: <code>%s</code></span></p>%s'
+                     % (prod, self._model_line(st, favs, "det"), e(_detect.MODEL_DIR), '<p>%s</p>' % buttons if buttons else ""))
+        # Testmodell
         if st["test_path"]:
-            if st["test_error"]:
-                state = '<br><span class="badge red">Fehler: %s</span>' % e(st["test_error"])
-            else:
-                state = ""
-            test_html = ('<p><b>%s</b>%s</p><p>'
-                         '<form method="post" action="api/model-promote" style="display:inline" '
+            state = '<br><span class="badge red">Fehler: %s</span>' % e(st["test_error"]) if st["test_error"] else ""
+            test_head = ('<p><span class="mname">%s</span> <span class="badge green">aktives Testmodell</span>%s<br><span id="stx" class="small">%s</span></p>'
+                         % (e(os.path.basename(st["test_path"])), state, self._model_line(st, favs, "test")))
+            test_btns = ('<p><form method="post" action="api/model-promote" style="display:inline" '
                          'onsubmit="return confirm(\'Das Testmodell wird produktiv. Das bisherige kommt in den Ordner vorher. Fortfahren?\')">'
                          '<button>Test in Produktion setzen</button></form> '
                          '<form method="post" action="api/model-delete-test" style="display:inline" '
-                         'onsubmit="return confirm(\'Testmodell l\\u00f6schen?\')"><button>Testmodell l&ouml;schen</button></form></p>'
-                         % (e(info(st["test_path"])), state))
+                         'onsubmit="return confirm(\'Testmodell l\\u00f6schen?\')"><button>Testmodell l&ouml;schen</button></form></p>')
         else:
-            test_html = '<p class="small">Kein Testmodell vorhanden.</p>'
+            test_head = '<p class="small">Kein Testmodell vorhanden.</p><span id="stx" hidden></span>'
+            test_btns = ""
         upload = ('<p><input type="file" id="mfile" accept=".onnx"> <button type="button" id="mup">Als Testmodell hochladen</button> '
                   '<span id="mstat" class="small"></span><br><span class="small">Die Datei wird in St&uuml;cken zu 10 MB geladen und bei '
                   'einem Abbruch beim n&auml;chsten Versuch fortgesetzt. Oder die Datei direkt in den Ordner <code>%s</code> legen '
                   "(das Add-on schaut alle 30 Sekunden nach). Ein neues Testmodell ersetzt das vorhandene.</span></p>" % e(_detect.TEST_DIR))
-        test_block = ("<h2>Testmodell (nur Favoriten)</h2>" + test_html + '<div id="progw">' + self._favtest_block(st, favs) + "</div>" + upload)
+        test_block = ("<h2>Testmodell (nur Favoriten)</h2>" + test_head + upload + '<div id="progw">' + self._favtest_block(st, favs) + "</div>" + test_btns)
         # Neu pruefen
         rc = st["recheck"]
         if rc["active"]:
@@ -1932,30 +1937,33 @@ class Board:
         recheck_block = "<h2>Bestand neu pr&uuml;fen</h2>" + recheck
         live = '<div id="live" data-d="%d">%s%s</div>' % (1 if only_diff else 0, self._perf_block(st), self._control_html(st, favs, only_diff))
         script = """<script>(function(){var b=document.getElementById('mup'),f=document.getElementById('mfile'),s=document.getElementById('mstat');
-var CH=10*1048576;
+var CH=10*1048576,pw=document.getElementById('progw'),lv=document.getElementById('live');
 function get(u,cb){var x=new XMLHttpRequest();x.open('GET',u);x.onload=function(){if(x.status===200)cb(x.responseText);};x.send();}
-if(b){b.onclick=function(){var fl=f.files[0];if(!fl){s.textContent='Bitte zuerst eine .onnx-Datei w\u00e4hlen.';return;}
-b.disabled=true;var uid=(fl.name+fl.size+fl.lastModified).replace(/[^A-Za-z0-9]/g,'').slice(-60);if(uid.length<6)uid='upload'+uid;
+function line(t,pct,bad){if(!pw)return;pw.innerHTML='<div id="prog" data-sig="up" data-act="1"><p><b'+(bad?' style="color:#c0392b"':'')+'>'+t+'</b>'+(pct>=0?' <progress max="100" value="'+pct+'"></progress> '+pct+' %':'')+'</p></div>';}
+if(b){b.onclick=function(){var fl=f.files[0];s.textContent='';if(!fl){s.textContent='Bitte zuerst eine .onnx-Datei w\u00e4hlen.';return;}
+b.disabled=true;window.__upl=true;var uid=(fl.name+fl.size+fl.lastModified).replace(/[^A-Za-z0-9]/g,'').slice(-60);if(uid.length<6)uid='upload'+uid;
 var tot=fl.size,n=Math.ceil(tot/CH),fails=0;
-function fail(t){b.disabled=false;s.textContent=t;}
+line('Upload startet \u2026',0);
+function fail(t){b.disabled=false;window.__upl=false;line(t,-1,true);}
 function send(off){if(off>=tot){return fail('Upload unerwartet beendet.');}
 var end=Math.min(off+CH,tot),i=Math.floor(off/CH)+1,x=new XMLHttpRequest();x.open('POST','api/model-upload-chunk');
 x.setRequestHeader('X-Upload-Id',uid);x.setRequestHeader('X-Offset',String(off));x.setRequestHeader('X-Total-Size',String(tot));
 x.setRequestHeader('X-Filename',encodeURIComponent(fl.name));
-x.upload.onprogress=function(ev){if(ev.lengthComputable)s.textContent='Lade hoch ... St\u00fcck '+i+' von '+n+' \u00b7 '+Math.round((off+ev.loaded)*100/tot)+' %';};
+x.upload.onprogress=function(ev){if(ev.lengthComputable){var d=off+ev.loaded;line('Upload: Teil '+i+' von '+n,Math.round(d*100/tot));if(d>=tot)line('Upload: Teil '+i+' von '+n+' \u00b7 Modell wird gepr\u00fcft \u2026',100);}};
 function retry(msg){fails++;if(fails>3){return fail(msg+' Nach 3 Wiederholungen aufgegeben. Beim n\u00e4chsten Versuch geht es ab hier weiter.');}
-s.textContent='St\u00fcck '+i+' von '+n+' wird wiederholt ('+fails+'/3) ...';setTimeout(function(){send(off);},1500);}
+line('Teil '+i+' von '+n+' wird wiederholt ('+fails+'/3) \u2026',Math.round(off*100/tot));setTimeout(function(){send(off);},1500);}
 x.onload=function(){var r={};try{r=JSON.parse(x.responseText);}catch(e){}
-if(x.status===200&&r.ok){fails=0;if(r.done){location.href='models?m='+encodeURIComponent(r.msg);}else{send(end);}}
+if(x.status===200&&r.ok){fails=0;if(r.done){window.__upl=false;line('Modell ist bereit \u2026',100);location.href='models?m='+encodeURIComponent(r.msg);}else{send(end);}}
 else if(x.status===409&&typeof r.received==='number'){send(r.received);}
 else if(x.status===200||(x.status>=400&&x.status<500&&x.status!==408&&x.status!==413)){fail(r.msg||('Fehler '+x.status));}
 else if(x.status===413&&r.msg&&r.msg.indexOf('Datei')===0){fail(r.msg);}
 else{retry(r.msg||('Fehler '+x.status+'.'));}};
 x.onerror=function(){retry('Verbindung unterbrochen.');};x.send(fl.slice(off,end));}
 get('api/model-upload-state?id='+uid,function(t){var r={};try{r=JSON.parse(t);}catch(e){}var got=(r.received||0);
-if(got>=tot)got=0;s.textContent=got?('Setze fort bei '+Math.round(got*100/tot)+' % ...'):'Lade hoch ...';send(got);});};}
-var pw=document.getElementById('progw'),lv=document.getElementById('live');if(!pw||!lv)return;
-function refreshLive(){get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;});}
+if(got>=tot)got=0;if(got)line('Setze fort bei '+Math.round(got*100/tot)+' % \u2026',Math.round(got*100/tot));send(got);});};}
+if(!pw||!lv)return;
+function refreshStat(){get('models?frag=mstat',function(h){var p=h.split('<!--sep-->'),a=document.getElementById('sp'),c=document.getElementById('stx');if(a)a.innerHTML=p[0];if(c&&p[1])c.innerHTML=p[1];});}
+function refreshLive(){get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;});refreshStat();}
 window.onLbClose=function(){if(window.lblDirty){window.lblDirty=false;refreshLive();}};
 lv.addEventListener('click',function(ev){var bt=ev.target.closest&&ev.target.closest('.lrow button');if(!bt)return;
 var row=bt.parentNode,n=bt.getAttribute('data-n'),s=(row.getAttribute('data-lbl')||'').split(',').filter(Boolean),i=s.indexOf(n);
@@ -1964,11 +1972,12 @@ row.setAttribute('data-lbl',s.join(','));[].forEach.call(row.querySelectorAll('b
 var x=new XMLHttpRequest();x.open('POST','api/label/'+row.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
 x.onload=function(){refreshLive();};x.send('v='+encodeURIComponent(s.join(',')));});
 var sig=(/data-sig="([^"]*)"/.exec(pw.innerHTML)||[])[1]||'';
-function tick(){if(document.hidden){setTimeout(tick,4000);return;}
+function tick(){if(document.hidden||window.__upl){setTimeout(tick,3000);return;}
 get('models?frag=prog',function(h){var m=/data-sig="([^"]*)"/.exec(h),act=/data-act="1"/.test(h);
 var lbo=document.getElementById('lb');if(lbo&&lbo.style.display==='flex'){setTimeout(tick,3000);return;}
+if(window.__upl){setTimeout(tick,3000);return;}
 pw.innerHTML=h;
-if(m&&m[1]!==sig){sig=m[1];get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;});}
+if(m&&m[1]!==sig){sig=m[1];refreshLive();}
 setTimeout(tick,act?2000:5000);});}
 setTimeout(tick,2000);})();</script>"""
         return self._models_shell(base, note + warn + prod_html + recheck_block + test_block + live + LIGHTBOX + script, refresh)
@@ -2068,6 +2077,47 @@ setTimeout(tick,2000);})();</script>"""
             parts.append("&uuml;bersehen: " + names(v[2]))
         return ' <b class="diff">&#10007; %s</b>' % "; ".join(parts)
 
+    def _tally(self, favs, pre):
+        """Vergleich eines Modells mit den eigenen Labels: (ausgewertet, richtig, mit Fehlalarm, mit Uebersehenem)."""
+        n = ok_n = fp_n = miss_n = 0
+        for r in favs:
+            v = self._verdict(self._truth(r), self._found(r, pre))
+            if v is None:
+                continue
+            n += 1
+            ok_n += 1 if v[0] else 0
+            fp_n += 1 if v[1] else 0
+            miss_n += 1 if v[2] else 0
+        return n, ok_n, fp_n, miss_n
+
+    def _model_line(self, st, favs, which):
+        """Kennzahlen eines Modells: Dateigroesse, Eingabe, Zeit pro Foto, Trefferquote auf den gelabelten Favoriten."""
+        prod = which == "det"
+        path = st["prod_path"] if prod else st["test_path"]
+        tag = st["prod_tag"] if prod else st["test_tag"]
+        parts = []
+        try:
+            parts.append(fmt_size(os.path.getsize(path)))
+        except OSError:
+            pass
+        px = st["size"] if prod else st["mem"].get(tag, {}).get("size", 0)
+        if px:
+            parts.append("Eingabe %d px" % px)
+        n, avg, _mx = self.store.perf(which, tag)
+        parts.append("&Oslash; <b>%s</b> pro Foto (%d Fotos)" % (self._sec(avg), n) if n else "Zeit pro Foto: noch keine Messung")
+        labeled = [r for r in favs if self._truth(r) is not None]
+        t_n, t_ok, _fp, _miss = self._tally(labeled, "det" if prod else "test")
+        if t_n:
+            parts.append("Trefferquote <b>%d von %d (%d %%)</b>" % (t_ok, t_n, round(100.0 * t_ok / t_n)))
+        else:
+            parts.append("Trefferquote: " + ("noch keine Labels" if not labeled else "noch keine Ergebnisse"))
+        if not prod or not st["builtin"]:
+            try:
+                parts.append("Datei vom " + time.strftime("%d.%m.%y %H:%M", time.localtime(os.path.getmtime(path))))
+            except OSError:
+                pass
+        return " &middot; ".join(parts)
+
     def _label_summary(self, st, favs):
         """Zusammenfassung gegen die eigenen Labels der Favoriten."""
         labeled = [r for r in favs if self._truth(r) is not None]
@@ -2075,17 +2125,7 @@ setTimeout(tick,2000);})();</script>"""
             return ('<p class="small">Noch keine Labels. Im gro&szlig;en Bild oder unter dem Foto <b>Tier, Mensch, Fahrzeug</b> oder <b>Leer</b> antippen '
                     "(im gro&szlig;en Bild auch mit den Tasten 1 bis 4). Danach steht hier, welches Modell wie oft richtig liegt.</p>")
 
-        def tally(pre):
-            n = ok_n = fp_n = miss_n = 0
-            for r in labeled:
-                v = self._verdict(self._truth(r), self._found(r, pre))
-                if v is None:
-                    continue
-                n += 1
-                ok_n += 1 if v[0] else 0
-                fp_n += 1 if v[1] else 0
-                miss_n += 1 if v[2] else 0
-            return n, ok_n, fp_n, miss_n
+        tally = lambda pre: self._tally(labeled, pre)
 
         def line(name, t):
             n, ok_n, fp_n, miss_n = t
