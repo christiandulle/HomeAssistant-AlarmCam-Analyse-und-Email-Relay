@@ -341,7 +341,8 @@ class Store:
                              ("test_label", "TEXT DEFAULT ''"), ("test_confs", "TEXT DEFAULT ''"),
                              ("test_boxes", "TEXT DEFAULT ''"), ("test_model", "TEXT DEFAULT ''"),
                              ("pbytes", "INTEGER DEFAULT 0"), ("ppath", "TEXT DEFAULT ''"),
-                             ("det_ms", "INTEGER DEFAULT 0"), ("test_ms", "INTEGER DEFAULT 0")):
+                             ("det_ms", "INTEGER DEFAULT 0"), ("test_ms", "INTEGER DEFAULT 0"),
+                             ("lbl", "TEXT DEFAULT ''")):
                 if col not in mail_cols:  # Bilderkennung (ab 1.11.0)
                     self.db.execute("ALTER TABLE mails ADD COLUMN %s %s" % (col, ddl))
             columns = [r[1] for r in self.db.execute("PRAGMA table_info(cameras)")]
@@ -1097,6 +1098,23 @@ class Store:
         """Favoritenstern setzen; gibt den neuen Wert (0/1) zurueck oder None, wenn es die Mail nicht gibt."""
         cur = self._exec("UPDATE mails SET fav=? WHERE id=?", (1 if value else 0, mail_id))
         return (1 if value else 0) if cur.rowcount else None
+
+    LABEL_NAMES = ("mensch", "tier", "fahrzeug")
+
+    @classmethod
+    def clean_label(cls, value):
+        """Eigenes Label eines Favoriten normalisieren: "" (keins), "leer" oder eine Auswahl aus mensch, tier, fahrzeug."""
+        parts = {p.strip().lower() for p in (value or "").split(",") if p.strip()}
+        names = [n for n in cls.LABEL_NAMES if n in parts]
+        if names:
+            return ",".join(names)
+        return "leer" if "leer" in parts else ""
+
+    def set_label(self, mail_id, value):
+        """Eigenes Label setzen (Referenz fuer den Vergleich der Modelle); gibt das gespeicherte Label zurueck oder None."""
+        label = self.clean_label(value)
+        cur = self._exec("UPDATE mails SET lbl=? WHERE id=?", (label, mail_id))
+        return label if cur.rowcount else None
 
     def fav(self, mail_id):
         rows = self._query("SELECT fav FROM mails WHERE id=?", (mail_id,))

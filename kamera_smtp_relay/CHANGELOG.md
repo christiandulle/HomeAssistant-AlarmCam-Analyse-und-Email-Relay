@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.5
+
+- Favoriten selbst labeln: im großen Bild (nur bei Favoriten) Knöpfe **Tier, Mensch, Fahrzeug, Leer** (mehrere wählbar, „Leer“ schließt die anderen aus; Tasten 1 bis 4) und dieselben Knöpfe unter jedem Foto in der Kontrolle
+- Kontrolle: Jedes Modell (Bisher, Test) wird automatisch mit deinem Label verglichen, ✓ bei Übereinstimmung, sonst „Fehlalarm: …“ bzw. „übersehen: …“; abweichende Kacheln sind markiert, „nur Abweichungen“ zeigt genau diese
+- Kontrolle: Zusammenfassung „Gegen deine Labels“ je Modell (x von y richtig, Fotos mit Fehlalarm, Fotos mit Übersehenem)
+- Labels bleiben dauerhaft am Foto und gelten für jedes spätere Modell
+
 ## 1.1.4
 
 - Modelle: Upload in Stücken zu 10 MB (der Home-Assistant-Zugang lehnt große Einzel-Uploads mit Fehler 413 ab). Fehlgeschlagene Stücke werden bis zu dreimal wiederholt, ein abgebrochener Upload wird beim nächsten Versuch mit derselben Datei fortgesetzt; Anzeige „Stück 5 von 12 · 42 %“

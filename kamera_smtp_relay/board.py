@@ -68,6 +68,7 @@ LIGHTBOX = """
 <div class="ctl"><button id="lbplay" title="Abspielen / Pause (Leertaste)">&#9654;</button><button id="lbdir" title="Abspielrichtung umschalten"></button>
 <button id="lbbx" title="Rahmen um erkannte Objekte ein-/ausblenden">Rahmen</button><span class="lbl">Tempo</span><input type="range" id="lbs" min="100" max="3000" step="100" value="800"
 title="Anzeigedauer pro Foto"><span class="lbl" id="lbv">0,8 s</span></div>
+<div class="ctl" id="lbrow" style="display:none"><span class="lbl">Label</span><button type="button" data-n="tier" title="Taste 1">Tier</button><button type="button" data-n="mensch" title="Taste 2">Mensch</button><button type="button" data-n="fahrzeug" title="Taste 3">Fahrzeug</button><button type="button" data-n="leer" title="Taste 4">Leer</button></div>
 <div id="lbd"></div><div id="lbb"></div></div>
 <script>
 (function(){
@@ -137,7 +138,18 @@ function sendNow(){var a=list[pos];if(!a||snb.disabled)return;snb.disabled=true;
 x.open('POST','api/resend-photo/'+a.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
 x.onload=function(){if(x.status===200){a.setAttribute('data-sk','queued');a.setAttribute('data-st','wartet');}sndBtn(a);
 if(x.status!==200){snb.textContent='nicht m\u00f6glich';}};x.onerror=function(){sndBtn(a);};x.send('');}
-function favBtn(a){var f=a&&a.getAttribute('data-fav')==='1';fvb.innerHTML=f?'&#9733;':'&#9734;';fvb.style.color=f?'#ffd24a':'#fff';}
+var lrow=document.getElementById('lbrow');
+function lblSet(a){return ((a&&a.getAttribute('data-lbl'))||'').split(',').filter(Boolean);}
+function lblBtns(a){var on=a&&a.getAttribute('data-fav')==='1'&&a.getAttribute('data-id');lrow.style.display=on?'':'none';if(!on)return;var s=lblSet(a);
+[].forEach.call(lrow.querySelectorAll('button'),function(b){b.className=s.indexOf(b.getAttribute('data-n'))>=0?'on':'';});}
+function toggleLbl(n){var a=list[pos];if(!a||a.getAttribute('data-fav')!=='1'||!a.getAttribute('data-id'))return;
+var s=lblSet(a),i=s.indexOf(n),old=a.getAttribute('data-lbl')||'';
+if(n==='leer'){s=i>=0?[]:['leer'];}else{s=s.filter(function(x){return x!=='leer'&&x!==n;});if(i<0)s.push(n);}
+a.setAttribute('data-lbl',s.join(','));lblBtns(a);
+function undo(){a.setAttribute('data-lbl',old);if(list[pos]===a)lblBtns(a);}
+var x=new XMLHttpRequest();x.open('POST','api/label/'+a.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+x.onload=function(){if(x.status!==200)undo();else{window.lblDirty=true;}};x.onerror=undo;x.send('v='+encodeURIComponent(s.join(',')));}
+function favBtn(a){var f=a&&a.getAttribute('data-fav')==='1';fvb.innerHTML=f?'&#9733;':'&#9734;';fvb.style.color=f?'#ffd24a':'#fff';lblBtns(a);}
 function setFav(a,v){a.setAttribute('data-fav',v?'1':'0');var old=a.querySelector('.fv');if(v&&!old){var sp=document.createElement('span');sp.className='fv';sp.innerHTML='&#9733;';a.appendChild(sp);}else if(!v&&old){a.removeChild(old);}}
 function toggleFav(){var a=list[pos];if(!a||!a.getAttribute('data-id'))return;var want=a.getAttribute('data-fav')==='1'?0:1;
 setFav(a,want);favBtn(a);var x=new XMLHttpRequest();x.open('POST','api/fav/'+a.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
@@ -150,7 +162,7 @@ function anchors(){return [].slice.call(document.querySelectorAll('a.zoom'));}
 function open(a){stop();try{fwd=localStorage.getItem('kameraDir')==='fwd';}catch(e){fwd=false;}dirBtn();list=anchors();show(list.indexOf(a));lb.style.display='flex';}
 function startShow(){fwd=true;dirBtn();pb.textContent='\u2026';lb.style.display='flex';
 loadAll(function(){list=anchors();if(!list.length){close();return;}playing=true;pb.innerHTML='&#10074;&#10074;';show(list.length-1);});}
-function close(){stop();dtx.style.display='none';bxl.style.display='none';lb.style.display='none';im.onload=im.onerror=null;im.src='';}
+function close(){stop();dtx.style.display='none';bxl.style.display='none';lb.style.display='none';im.onload=im.onerror=null;im.src='';if(window.onLbClose)window.onLbClose();}
 function step(d){stop();if(lb.style.display==='flex'&&pos+d>=0&&pos+d<list.length)show(pos+d);}
 document.addEventListener('click',function(ev){
 var a=ev.target.closest&&ev.target.closest('a.zoom');
@@ -161,6 +173,7 @@ else if(ev.target===prev){step(-1);}else if(ev.target===next){step(1);}
 else if(ev.target===pb){if(playing)stop();else play();pb.blur();}
 else if(ev.target===dirb){fwd=!fwd;try{localStorage.setItem('kameraDir',fwd?'fwd':'back');}catch(e){}dirBtn();setCap(pos,list[pos].getAttribute('data-cap')||'');schedule();dirb.blur();}
 else if(ev.target.id==='lbmore'){loadMore();}
+else if(ev.target.closest&&ev.target.closest('#lbrow button')){toggleLbl(ev.target.getAttribute('data-n'));ev.target.blur();}
 else if(ev.target===fvb){toggleFav();fvb.blur();}else if(ev.target===snb){sendNow();snb.blur();}
 else if(ev.target===bxb){showBox=!showBox;try{localStorage.setItem('kameraBoxes',showBox?'1':'0');}catch(e){}boxBtn();placeBoxes();bxb.blur();}});
 sel.addEventListener('input',function(){label();try{localStorage.setItem('kameraSpeed',sel.value);}catch(e){}schedule();});
@@ -169,7 +182,8 @@ document.addEventListener('keyup',function(ev){if(ev.key===' '&&lb.style.display
 document.addEventListener('keydown',function(ev){
 if(lb.style.display!=='flex'||ev.target===sel)return;
 if(ev.key==='Escape')close();else if(ev.key==='ArrowLeft')step(-1);else if(ev.key==='ArrowRight')step(1);
-else if(ev.key==='f'||ev.key==='F'){toggleFav();}else if(ev.key===' '){ev.preventDefault();if(playing)stop();else play();}});
+else if(ev.key==='f'||ev.key==='F'){toggleFav();}
+else if(ev.key.length===1&&'1234'.indexOf(ev.key)>=0){toggleLbl(['tier','mensch','fahrzeug','leer'][+ev.key-1]);}else if(ev.key===' '){ev.preventDefault();if(playing)stop();else play();}});
 var Z={s:1,x:0,y:0},g=null,lastTap=0;
 function apply(){im.style.transform=Z.s===1&&!Z.x&&!Z.y?'':'translate('+Z.x+'px,'+Z.y+'px) scale('+Z.s+')';placeDet();}
 function resetZoom(){Z.s=1;Z.x=0;Z.y=0;apply();}
@@ -280,7 +294,7 @@ button.cnt:hover{background:#7fae3f}button.cnt:disabled{opacity:.5;cursor:defaul
 .sticky{position:sticky;top:0;z-index:5;background:var(--bg);padding:6px 0}
 #lb{display:none;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.88);
 align-items:center;justify-content:center;flex-direction:column;color:#fff}
-#lb .stage{display:flex;align-items:center;justify-content:center;width:100%;flex:none;height:min(56.25vw,calc(100vh - 200px))}
+#lb .stage{display:flex;align-items:center;justify-content:center;width:100%;flex:none;height:min(56.25vw,calc(100vh - 250px))}
 #lb{-webkit-user-select:none;user-select:none}
 #lb .stage,#lb img{touch-action:none}
 #lbb{position:fixed;display:none;pointer-events:none;z-index:1}
@@ -295,6 +309,11 @@ font-size:44px;padding:10px 18px;cursor:pointer;opacity:.85;margin:0}
 #lb .fvb{position:absolute;top:8px;left:16px;background:none;border:none;color:#fff;font-size:34px;cursor:pointer;margin:0;padding:0 6px;line-height:1.2;z-index:3}
 #lb .snd{position:absolute;top:14px;left:70px;z-index:3;margin:0;font-size:13px;padding:5px 11px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;max-width:calc(100vw - 160px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #lb .snd:disabled{opacity:.6}
+#lb #lbrow button.on{background:#6e9a35}
+.lrow{display:flex;gap:4px;padding:0 12px 10px;flex-wrap:wrap}
+.lrow button{font-size:12px;padding:3px 9px;border-radius:12px;border:1px solid var(--line,#8886);background:transparent;color:var(--fg);cursor:pointer;margin:0}
+.lrow button.on{background:#6e9a35;color:#fff;border-color:#6e9a35}
+.okm{color:#4fa65b;font-weight:700}
 #lb .x{position:absolute;top:8px;right:16px;background:none;border:none;color:#fff;font-size:34px;
 cursor:pointer;margin:0}
 @media(max-width:700px){
@@ -535,10 +554,10 @@ def zoom_attrs(row, caption):
     keys = row.keys()
     st = STATUS.get(row["status"], (row["status"], ""))[0] if "status" in keys else ""
     return ('data-cap="%s" data-det="%s" data-box="%s" data-id="%d" data-fav="%d" data-test="%s" data-tbox="%s"'
-            ' data-st="%s" data-sk="%s"'
+            ' data-st="%s" data-sk="%s" data-lbl="%s"'
             % (e(caption), e(det_text(row)), e(det_boxes(row)), row["id"],
                1 if "fav" in keys and row["fav"] else 0, e(test_text(row)), e(test_boxes(row)),
-               e(st), e(row["status"] if "status" in keys else "")))
+               e(st), e(row["status"] if "status" in keys else ""), e(row["lbl"] if "lbl" in keys and row["lbl"] else "")))
 
 
 def det_boxes(row):
@@ -849,6 +868,14 @@ class Board:
             if value and self.detector is not None:
                 self.detector.submit_test(mail_id)
             return self._send(req, 200, '{"fav": %d}' % value, "application/json", {"Cache-Control": "no-store"})
+        match = re.fullmatch(r"/api/label/(\d+)", path)
+        if match:
+            mail_id = int(match.group(1))
+            value = self.store.set_label(mail_id, (form.get("v") or [""])[0])
+            if value is None:
+                return self._send(req, 404, "Nicht gefunden", "text/plain; charset=utf-8")
+            log.info("[#%d] Label gesetzt: %s", mail_id, value or "(entfernt)")
+            return self._send(req, 200, json.dumps({"lbl": value}), "application/json", {"Cache-Control": "no-store"})
         match = re.fullmatch(r"/api/resend-photo/(\d+)", path)
         if match:
             mail_id = int(match.group(1))
@@ -1928,6 +1955,14 @@ x.onerror=function(){retry('Verbindung unterbrochen.');};x.send(fl.slice(off,end
 get('api/model-upload-state?id='+uid,function(t){var r={};try{r=JSON.parse(t);}catch(e){}var got=(r.received||0);
 if(got>=tot)got=0;s.textContent=got?('Setze fort bei '+Math.round(got*100/tot)+' % ...'):'Lade hoch ...';send(got);});};}
 var pw=document.getElementById('progw'),lv=document.getElementById('live');if(!pw||!lv)return;
+function refreshLive(){get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;});}
+window.onLbClose=function(){if(window.lblDirty){window.lblDirty=false;refreshLive();}};
+lv.addEventListener('click',function(ev){var bt=ev.target.closest&&ev.target.closest('.lrow button');if(!bt)return;
+var row=bt.parentNode,n=bt.getAttribute('data-n'),s=(row.getAttribute('data-lbl')||'').split(',').filter(Boolean),i=s.indexOf(n);
+if(n==='leer'){s=i>=0?[]:['leer'];}else{s=s.filter(function(x){return x!=='leer'&&x!==n;});if(i<0)s.push(n);}
+row.setAttribute('data-lbl',s.join(','));[].forEach.call(row.querySelectorAll('button'),function(b){b.className=s.indexOf(b.getAttribute('data-n'))>=0?'on':'';});
+var x=new XMLHttpRequest();x.open('POST','api/label/'+row.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
+x.onload=function(){refreshLive();};x.send('v='+encodeURIComponent(s.join(',')));});
 var sig=(/data-sig="([^"]*)"/.exec(pw.innerHTML)||[])[1]||'';
 function tick(){if(document.hidden){setTimeout(tick,4000);return;}
 get('models?frag=prog',function(h){var m=/data-sig="([^"]*)"/.exec(h),act=/data-act="1"/.test(h);
@@ -1993,8 +2028,83 @@ setTimeout(tick,2000);})();</script>"""
                 body += '<p class="small">Letzter Lauf (%s): %s</p>' % (e(time.strftime("%d.%m. %H:%M", time.localtime(f["finished"]))), last)
         return '<div id="prog" data-sig="%s" data-act="%d">%s</div>' % (e(sig), 1 if f["active"] else 0, body)
 
+    @staticmethod
+    def _truth(row):
+        """Eigenes Label eines Favoriten als Menge (leer = "Leer" gelabelt); None, wenn noch nicht gelabelt."""
+        lbl = row["lbl"] if "lbl" in row.keys() else ""
+        if not lbl:
+            return None
+        return {n for n in lbl.split(",") if n in DET_BADGES and n not in ("leer", "fehler")}
+
+    @staticmethod
+    def _found(row, pre):
+        """Was ein Modell gemeldet hat, als Menge; None, wenn es kein (brauchbares) Ergebnis gibt."""
+        if pre == "test" and not test_active(row):
+            return None
+        label = row[pre + "_label"] if pre + "_label" in row.keys() else ""
+        if not label or label == "fehler":
+            return None
+        return {n for n in label.split(",") if n in DET_BADGES and n not in ("leer", "fehler")}
+
+    @staticmethod
+    def _verdict(truth, found):
+        """(stimmt, Fehlalarme, uebersehen) oder None, wenn nicht vergleichbar."""
+        if truth is None or found is None:
+            return None
+        fp, miss = found - truth, truth - found
+        return (not fp and not miss, fp, miss)
+
+    @staticmethod
+    def _verdict_html(v):
+        if v is None:
+            return ""
+        if v[0]:
+            return ' <span class="okm">&#10003;</span>'
+        names = lambda x: ", ".join(DET_BADGES[n][0] for n in ("mensch", "tier", "fahrzeug") if n in x)
+        parts = []
+        if v[1]:
+            parts.append("Fehlalarm: " + names(v[1]))
+        if v[2]:
+            parts.append("&uuml;bersehen: " + names(v[2]))
+        return ' <b class="diff">&#10007; %s</b>' % "; ".join(parts)
+
+    def _label_summary(self, st, favs):
+        """Zusammenfassung gegen die eigenen Labels der Favoriten."""
+        labeled = [r for r in favs if self._truth(r) is not None]
+        if not labeled:
+            return ('<p class="small">Noch keine Labels. Im gro&szlig;en Bild oder unter dem Foto <b>Tier, Mensch, Fahrzeug</b> oder <b>Leer</b> antippen '
+                    "(im gro&szlig;en Bild auch mit den Tasten 1 bis 4). Danach steht hier, welches Modell wie oft richtig liegt.</p>")
+
+        def tally(pre):
+            n = ok_n = fp_n = miss_n = 0
+            for r in labeled:
+                v = self._verdict(self._truth(r), self._found(r, pre))
+                if v is None:
+                    continue
+                n += 1
+                ok_n += 1 if v[0] else 0
+                fp_n += 1 if v[1] else 0
+                miss_n += 1 if v[2] else 0
+            return n, ok_n, fp_n, miss_n
+
+        def line(name, t):
+            n, ok_n, fp_n, miss_n = t
+            if not n:
+                return "%s: noch keine Ergebnisse" % name
+            return "%s <b>%d von %d richtig</b> (%d mit Fehlalarm, %d mit &uuml;bersehenem)" % (name, ok_n, n, fp_n, miss_n)
+
+        parts = [line("Produktiv", tally("det"))]
+        if st["test_path"]:
+            parts.append(line("Test", tally("test")))
+        n_leer = sum(1 for r in labeled if not self._truth(r))
+        tip = ""
+        if n_leer < 5:
+            tip = (" Tipp: Fehlalarme auf leeren Bildern (z. B. Kameraschrift) siehst du nur, wenn auch einige Fotos ohne Inhalt Favorit mit Label "
+                   "&bdquo;Leer&ldquo; sind.")
+        return '<p class="small"><b>Gegen deine Labels</b> (%d von %d Favoriten gelabelt): %s.%s</p>' % (len(labeled), len(favs), " &middot; ".join(parts), tip)
+
     def _control_html(self, st, favs, only_diff):
-        """Kontrolle Favoriten: Kacheln mit Ergebnis von bisher und Test."""
+        """Kontrolle Favoriten: Kacheln mit Ergebnis von bisher und Test, eigenes Label und Abweichungen davon."""
         cams = self.store.camera_map()
         tiles, n_test, n_same = [], 0, 0
         for r in favs:
@@ -2007,7 +2117,14 @@ setTimeout(tick,2000);})();</script>"""
             if active:
                 n_test += 1
                 n_same += 1 if same else 0
-            if only_diff and not (active and not same):
+            truth = self._truth(r)
+            v_det = self._verdict(truth, self._found(r, "det"))
+            v_test = self._verdict(truth, self._found(r, "test"))
+            if truth is not None:
+                bad = any(v is not None and not v[0] for v in (v_det, v_test))
+            else:
+                bad = active and not same
+            if only_diff and not bad:
                 continue
             cam = cams.get(r["camera"])
             title = self._cam_title(cam["revier"], cam["name"]) if cam else ""
@@ -2016,27 +2133,36 @@ setTimeout(tick,2000);})();</script>"""
             now_txt = det_text(r).replace("\n", ", ") or "-"
             if r["det_ms"]:
                 now_txt += " \u00b7 " + self._sec(r["det_ms"])
+            line1 = '<div class="d%s">Bisher: %s%s</div>' % (" diff" if v_det is not None and not v_det[0] else "", e(now_txt), self._verdict_html(v_det))
             if active:
                 test_txt = test_text(r).replace("\n", ", ")
                 if r["test_ms"]:
                     test_txt += " \u00b7 " + self._sec(r["test_ms"])
-                line2 = '<div class="d%s">Test: %s</div>' % ("" if same else " diff", e(test_txt))
+                if truth is not None:
+                    mark = " diff" if (v_test is not None and not v_test[0]) else ""
+                else:
+                    mark = "" if same else " diff"
+                line2 = '<div class="d%s">Test: %s%s</div>' % (mark, e(test_txt), self._verdict_html(v_test))
             elif st["test_path"]:
                 line2 = '<div class="d">Test: wird gepr&uuml;ft &hellip;</div>'
             else:
                 line2 = ""
+            cur = (r["lbl"] if "lbl" in r.keys() else "") or ""
+            have = set(cur.split(","))
+            btns = "".join('<button type="button" data-n="%s"%s>%s</button>' % (n, ' class="on"' if n in have else "", lab)
+                           for n, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug"), ("leer", "Leer")))
             tiles.append(
                 '<div class="gc%s"><a href="%s" class="zoom" %s><img loading="lazy" src="%s" alt=""><span class="fv">&#9733;</span></a>'
-                '<div class="t">%s</div><div class="d">Bisher: %s</div>%s</div>'
-                % ("" if same or not active else " diffc", src, zoom_attrs(r, cap), src, e(title), e(now_txt), line2))
+                '<div class="t">%s</div>%s%s<div class="lrow" data-id="%d" data-lbl="%s">%s</div></div>'
+                % (" diffc" if bad else "", src, zoom_attrs(r, cap), src, e(title), line1, line2, mail_id, e(cur), btns))
         if st["test_path"]:
             summary = "%d Favoriten, %d mit Testergebnis, %d gleich, %d abweichend" % (len(favs), n_test, n_same, n_test - n_same)
-            toggle = ('<a href="models?d=%d">%s</a>' % (0 if only_diff else 1, "alle anzeigen" if only_diff else "nur Abweichungen"))
         else:
             summary = "%d Favoriten (noch kein Testmodell)" % len(favs)
-            toggle = ""
-        return ('<h2>Kontrolle: Favoriten</h2><p class="small">%s %s</p><div class="grid">%s</div>'
-                % (e(summary), toggle, "".join(tiles) or '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'))
+        toggle = '<a href="models?d=%d">%s</a>' % (0 if only_diff else 1, "alle anzeigen" if only_diff else "nur Abweichungen")
+        return ('<h2>Kontrolle: Favoriten</h2>%s<p class="small">%s %s</p><div class="grid">%s</div>'
+                % (self._label_summary(st, favs), e(summary), toggle,
+                   "".join(tiles) or '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'))
 
     def _models_shell(self, base, body, refresh):
         return (

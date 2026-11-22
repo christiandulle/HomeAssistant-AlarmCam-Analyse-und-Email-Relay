@@ -1,5 +1,5 @@
 name: "AlarmCam Analyse und Mail-Relay"
-version: "1.1.4"
+version: "1.1.5"
 slug: "kamera_smtp_relay"
 description: "Zentrale Alarmmail-Verwaltung für Kameras mit Bildanalyse und selektiver Weiterleitung."
 arch:
