@@ -267,8 +267,9 @@ class DetectWorker(threading.Thread):
         self.test_failed = False
         self.test_error = ""
         self.test_used = 0.0
-        self.test_left = 0
-        self.test_started = 0.0
+        self.fav_gen = 0     # Nummer des laufenden Favoriten-Tests (veraltete Auftraege in der Warteschlange werden uebersprungen)
+        self.favtest = {"active": False, "total": 0, "done": 0, "started": 0.0, "finished": 0.0, "cur": 0,
+                        "loading": False, "ms_sum": 0, "n": 0, "cancelled": False, "manual": False, "tag": ""}
         self.mem = {}        # Modellkennung -> {"threads", "load_mb", "peak_mb"} (bleibt auch nach dem Entladen)
         self.last_ms = 0     # mittlere Zeit pro Foto der zuletzt ausgewerteten Mail
         self.recheck = {"active": False, "total": 0, "done": 0, "cancel": False, "started": 0.0, "finished": 0.0}
@@ -285,6 +286,27 @@ class DetectWorker(threading.Thread):
     def check(self):
         """Modellordner sofort neu lesen (statt auf die naechste 30-Sekunden-Runde zu warten)."""
         self.queue.put((0, next(self.seq), 0, "check"))
+
+    def favtest_start(self, manual=True):
+        """Alle Favoriten mit dem Testmodell (neu) auswerten. Gibt die Anzahl zurueck (0 = nichts zu tun oder laeuft schon)."""
+        if not TEST_TAG or self.test_failed or self.favtest["active"]:
+            return 0
+        ids = self.store.all_fav_ids() if manual else self.store.pending_test(TEST_TAG)
+        self.fav_gen += 1
+        self.favtest.update(active=bool(ids), total=len(ids), done=0, started=time.time(), finished=0.0, cur=0,
+                            loading=False, ms_sum=0, n=0, cancelled=False, manual=manual, tag=TEST_TAG)
+        for mail_id in ids:
+            self.queue.put((1, next(self.seq), mail_id, "favrun:%d" % self.fav_gen))
+        if ids:
+            log.info("Testmodell %s: %d Favorit(en) werden geprueft", os.path.basename(TEST_PATH), len(ids))
+        return len(ids)
+
+    def favtest_cancel(self):
+        f = self.favtest
+        if f["active"]:
+            self.fav_gen += 1   # offene Auftraege werden damit uebersprungen
+            f.update(active=False, cancelled=True, finished=time.time(), loading=False, cur=0)
+            log.info("Testmodell: Favoriten-Test abgebrochen (%d von %d)", f["done"], f["total"])
 
     def recheck_start(self):
         """Manuell: alle Fotos im Bestand mit dem produktiven Modell neu auswerten. Gibt die Anzahl zurueck."""
@@ -307,7 +329,7 @@ class DetectWorker(threading.Thread):
             "ok": self.ok, "prod_path": MODEL_PATH, "prod_tag": MODEL_TAG, "builtin": MODEL_PATH == BUILTIN_PATH,
             "size": getattr(self.detector, "size", 0), "test_path": TEST_PATH, "test_tag": TEST_TAG,
             "test_error": self.test_error, "test_loaded": self.test_detector is not None,
-            "recheck": dict(self.recheck), "mem": dict(self.mem), "threads": self.threads,
+            "recheck": dict(self.recheck), "favtest": dict(self.favtest), "mem": dict(self.mem), "threads": self.threads,
             "bad": [(os.path.basename(f), BAD[_file_tag(f)]) for f in list_models(MODEL_DIR) if _file_tag(f) in BAD],
         }
 
@@ -379,12 +401,10 @@ class DetectWorker(threading.Thread):
             self.test_failed = False
             self.test_error = ""
             self.test_loaded_tag = TEST_TAG
+            self.fav_gen += 1   # ein laufender Test mit dem alten Modell ist damit beendet
+            self.favtest.update(active=False, loading=False, cur=0)
             if TEST_TAG:
-                ids = self.store.pending_test(TEST_TAG)
-                for mail_id in ids:
-                    self.queue.put((1, next(self.seq), mail_id, "test"))
-                self.test_left, self.test_started = len(ids), time.time()
-                log.info("Testmodell %s: %d Favorit(en) werden geprueft", os.path.basename(TEST_PATH), len(ids))
+                self.favtest_start(manual=False)
             else:
                 log.info("Testmodell entfernt")
 
@@ -418,21 +438,27 @@ class DetectWorker(threading.Thread):
         return merged, done, total, first_boxes
 
     def process_test(self, mail_id):
+        """Wertet einen Favoriten mit dem Testmodell aus. Gibt die Zeit pro Foto in ms zurueck (0 = nichts gemessen)."""
         if not TEST_TAG or self.test_failed:
-            return
+            return 0
         if self.test_detector is None:
-            self._load_test()
+            self.favtest["loading"] = True
+            try:
+                self._load_test()
+            finally:
+                self.favtest["loading"] = False
             if self.test_detector is None:
-                return
+                return 0
         self.test_used = time.time()
         images = self.store.mail_images(mail_id, self.MAX_IMAGES)
         merged, done, total, first_boxes = self._analyse_all(self.test_detector, mail_id, images) if images else ({}, 0, 0, "")
         if not done:
             self.store.set_test(mail_id, "fehler", "", "", TEST_TAG)
-            return
+            return 0
         label, confs, _best = encode(merged)
         self.store.set_test(mail_id, label, confs, first_boxes, TEST_TAG, ms=self.last_ms)
         self._remember(TEST_TAG, self.test_detector)
+        return self.last_ms
 
     def process(self, mail_id):
         images = self.store.mail_images(mail_id, self.MAX_IMAGES)
@@ -492,15 +518,31 @@ class DetectWorker(threading.Thread):
             if kind == "check":
                 self._check_models()
                 continue
-            if kind == "test":
+            if kind == "test":   # neuer Favorit
                 try:
                     self.process_test(mail_id)
                 except Exception as exc:
                     log.warning("Testmodell fuer Mail %s fehlgeschlagen: %r", mail_id, exc)
-                if prio == 1 and self.test_left > 0:
-                    self.test_left -= 1
-                    if self.test_left == 0:
-                        log.info("Testmodell: Favoriten fertig (%d s)", round(time.time() - self.test_started))
+                continue
+            if kind.startswith("favrun:"):
+                f = self.favtest
+                if int(kind[7:]) != self.fav_gen or not f["active"]:
+                    continue   # veralteter Auftrag (Abbruch oder neues Testmodell)
+                f["cur"] = mail_id
+                ms = 0
+                try:
+                    ms = self.process_test(mail_id)
+                except Exception as exc:
+                    log.warning("Testmodell fuer Mail %s fehlgeschlagen: %r", mail_id, exc)
+                if int(kind[7:]) != self.fav_gen:
+                    continue   # waehrend der Auswertung abgebrochen
+                f["done"] += 1
+                if ms:
+                    f["ms_sum"] += ms
+                    f["n"] += 1
+                if f["done"] >= f["total"]:
+                    f.update(active=False, finished=time.time(), cur=0)
+                    log.info("Testmodell: Favoriten fertig (%d s)", round(f["finished"] - f["started"]))
                 continue
             if kind == "recheck":
                 r = self.recheck

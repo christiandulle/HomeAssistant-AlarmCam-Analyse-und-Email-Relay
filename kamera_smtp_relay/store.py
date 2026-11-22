@@ -1158,6 +1158,11 @@ class Store:
         return [r["id"] for r in self._query(
             "SELECT id FROM mails WHERE n_images>0 AND (has_file=1 OR preview_type='image') ORDER BY id DESC")]
 
+    def all_fav_ids(self):
+        """Alle Favoriten mit auswertbarem Foto, neueste zuerst (fuer \"Favoriten jetzt pruefen\")."""
+        return [r["id"] for r in self._query(
+            "SELECT id FROM mails WHERE fav=1 AND n_images>0 AND (has_file=1 OR preview_type='image') ORDER BY id DESC")]
+
     def promote_test(self, test_tag, prod_tag):
         """Testmodell wird produktiv: bei Favoriten das schon berechnete Testergebnis als normales Ergebnis uebernehmen."""
         n = 0

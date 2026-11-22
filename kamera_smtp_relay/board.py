@@ -664,7 +664,11 @@ class Board:
             if method == "POST":
                 if path == "/api/model-upload":
                     return self._model_upload(req)
+                if path == "/api/model-upload-chunk":
+                    return self._model_upload_chunk(req)
                 return self._post(req, path)
+            if path == "/api/model-upload-state":
+                return self._model_upload_state(req, query)
             if path in ("/", "/index.html"):
                 return self._gallery_page(req, query)
             if path == "/mails":
@@ -675,7 +679,7 @@ class Board:
                 return self._send(
                     req, 200,
                     self.render_models(self._ingress(req) + "/", (query.get("m") or [""])[0][:200],
-                                       (query.get("d") or [""])[0] == "1"),
+                                       (query.get("d") or [""])[0] == "1", (query.get("frag") or [""])[0]),
                     extra={"Cache-Control": "no-store"},
                 )
             if path == "/reviere":
@@ -826,7 +830,7 @@ class Board:
             req.send_header("Content-Length", "0")
             req.end_headers()
             return
-        match = re.fullmatch(r"/api/model-(promote|delete-test|rollback|builtin|recheck|recheck-cancel)", path)
+        match = re.fullmatch(r"/api/model-(promote|delete-test|rollback|builtin|recheck|recheck-cancel|favtest|favtest-cancel)", path)
         if match:
             message = self._model_action(match.group(1))
             req.send_response(303)
@@ -1561,6 +1565,16 @@ class Board:
             if name == "recheck-cancel":
                 d.recheck_cancel()
                 return "Neu-Pr\u00fcfung wird abgebrochen."
+            if name == "favtest":
+                if not _detect.TEST_TAG:
+                    return "Kein Testmodell vorhanden."
+                if d.favtest["active"]:
+                    return "Der Favoriten-Test l\u00e4uft bereits."
+                n = d.favtest_start(manual=True)
+                return "Favoriten werden gepr\u00fcft (%d Fotos)." % n if n else "Keine Favoriten mit Foto vorhanden."
+            if name == "favtest-cancel":
+                d.favtest_cancel()
+                return "Favoriten-Test abgebrochen."
             os.makedirs(_detect.TEST_DIR, exist_ok=True)
             if name == "delete-test":
                 for f in _detect.list_models(_detect.TEST_DIR):
@@ -1673,6 +1687,104 @@ class Board:
                 sink.close()
             return reply(False, "Speichern fehlgeschlagen: %s" % exc.strerror, 500)
 
+    UPLOAD_CHUNK_MAX = 32 * 1048576   # so gross darf ein einzelnes Stueck hoechstens sein (der Browser nimmt 10 MB)
+    _up_lock = threading.Lock()
+
+    @staticmethod
+    def _upload_id(value):
+        return value if re.fullmatch(r"[A-Za-z0-9]{6,80}", value or "") else ""
+
+    def _clean_parts(self):
+        """Liegengebliebene Teil-Uploads (aelter als ein Tag) entfernen."""
+        try:
+            for f in os.listdir(_detect.TEST_DIR):
+                fp = os.path.join(_detect.TEST_DIR, f)
+                if f.startswith(".upload-") and f.endswith(".part") and time.time() - os.path.getmtime(fp) > 86400:
+                    os.remove(fp)
+        except OSError:
+            pass
+
+    def _model_upload_state(self, req, query):
+        """Wie viele Bytes eines begonnenen Uploads liegen schon da (zum Fortsetzen nach einem Abbruch)."""
+        uid = self._upload_id((query.get("id") or [""])[0])
+        got = 0
+        if uid:
+            try:
+                got = os.path.getsize(os.path.join(_detect.TEST_DIR, ".upload-%s.part" % uid))
+            except OSError:
+                got = 0
+        self._send(req, 200, json.dumps({"ok": bool(uid), "received": got}), "application/json", {"Cache-Control": "no-store"})
+
+    def _model_upload_chunk(self, req):
+        """Upload in Stuecken: Rohdaten im Body, Kopfzeilen X-Upload-Id, X-Offset, X-Total-Size, X-Filename.
+        Das letzte Stueck (Offset + Laenge = Gesamtgroesse) schliesst den Upload ab, prueft das Modell und legt es in test."""
+        def reply(ok, msg, code=200, **extra):
+            if not ok:
+                req.close_connection = True   # ungelesener Body darf die naechste Anfrage nicht stoeren
+            body = {"ok": ok, "msg": msg}
+            body.update(extra)
+            self._send(req, code, json.dumps(body), "application/json", {"Cache-Control": "no-store"})
+
+        uid = self._upload_id(req.headers.get("X-Upload-Id", ""))
+        try:
+            length = int(req.headers.get("Content-Length") or 0)
+            offset = int(req.headers.get("X-Offset", ""))
+            total = int(req.headers.get("X-Total-Size", ""))
+        except ValueError:
+            return reply(False, "Ung\u00fcltige Angaben im Upload.", 400)
+        name = re.sub(r"[^A-Za-z0-9._-]+", "_", unquote(req.headers.get("X-Filename", ""))).strip("._")
+        if not uid or offset < 0 or total <= 0 or offset + length > total:
+            return reply(False, "Ung\u00fcltige Angaben im Upload.", 400)
+        if total > _detect.MAX_UPLOAD:
+            return reply(False, "Datei ist gr\u00f6\u00dfer als %d MB." % (_detect.MAX_UPLOAD // 1048576), 413)
+        if length <= 0 or length > self.UPLOAD_CHUNK_MAX:
+            return reply(False, "St\u00fcck fehlt oder ist zu gro\u00df (h\u00f6chstens %d MB)." % (self.UPLOAD_CHUNK_MAX // 1048576), 413)
+        if self.detector is None:
+            return reply(False, "Die Bilderkennung ist aus.", 400)
+        if not name.lower().endswith(".onnx"):
+            return reply(False, "Nur .onnx-Dateien sind m\u00f6glich.", 400)
+        part = os.path.join(_detect.TEST_DIR, ".upload-%s.part" % uid)
+        with self._up_lock:
+            try:
+                os.makedirs(_detect.TEST_DIR, exist_ok=True)
+                if offset == 0:
+                    self._clean_parts()
+                have = os.path.getsize(part) if os.path.exists(part) else 0
+                if offset > have:   # davor fehlt etwas: Client soll ab "received" neu beginnen
+                    return reply(False, "St\u00fcck fehlt davor.", 409, received=have)
+                with open(part, "r+b" if have else "wb") as sink:
+                    sink.seek(offset)
+                    sink.truncate(offset)   # Wiederholung desselben Stuecks ueberschreibt
+                    left = length
+                    while left > 0:
+                        chunk = req.rfile.read(min(1 << 20, left))
+                        if not chunk:
+                            break
+                        left -= len(chunk)
+                        sink.write(chunk)
+                if left > 0:
+                    with open(part, "r+b") as sink:
+                        sink.truncate(offset)
+                    return reply(False, "St\u00fcck unvollst\u00e4ndig.", 503, received=offset)
+                if offset + length < total:
+                    return reply(True, "ok", received=offset + length)
+                if os.path.getsize(part) != total:
+                    os.remove(part)
+                    return reply(False, "Upload unvollst\u00e4ndig, bitte noch einmal von vorn.", 400, received=0)
+                ok, msg, _size = _detect.validate_model(part)
+                if not ok:
+                    os.remove(part)
+                    return reply(False, "Modell nicht nutzbar: " + msg, 200, received=0)
+                for old in _detect.list_models(_detect.TEST_DIR):
+                    os.remove(old)
+                os.replace(part, os.path.join(_detect.TEST_DIR, name))
+                self.detector.check()
+                log.info("Testmodell hochgeladen: %s (%s, in St\u00fccken)", name, fmt_size(total))
+                return reply(True, "Testmodell %s ist bereit, die Favoriten werden gepr\u00fcft." % name, done=True)
+            except OSError as exc:
+                log.error("Upload fehlgeschlagen: %r", exc)
+                return reply(False, "Speichern fehlgeschlagen: %s" % exc.strerror, 500)
+
     @staticmethod
     def _sec(ms):
         return ("%.1f s" % (ms / 1000.0)).replace(".", ",") if ms else "-"
@@ -1711,9 +1823,16 @@ class Board:
                 "(Schnitt der letzten 7 Tage) mal Zeit pro Foto. Der Arbeitsspeicher ist der des ganzen Add-ons, daher ungef&auml;hr; "
                 "Messungen vor 1.1.3 fehlen.</p>" % ("".join(trs), note, e(str(st["threads"])), per_day))
 
-    def render_models(self, base, message="", only_diff=False):
+    def render_models(self, base, message="", only_diff=False, frag=""):
         d = self.detector
         st = d.status() if d is not None else None
+        if frag:   # Teilstuecke fuer die Live-Aktualisierung im Browser
+            if st is None:
+                return ""
+            favs = self.store.gallery_rows(fav=True, limit=2000)
+            if frag == "prog":
+                return self._favtest_block(st, favs)
+            return self._perf_block(st) + self._control_html(st, favs, only_diff)
         try:
             os.makedirs(_detect.TEST_DIR, exist_ok=True)   # Ordner anlegen, damit man ihn per Samba findet
         except OSError:
@@ -1752,15 +1871,11 @@ class Board:
         # Testmodell
         favs = self.store.gallery_rows(fav=True, limit=2000)
         if st["test_path"]:
-            pending = len(self.store.pending_test(st["test_tag"]))
             if st["test_error"]:
-                state = '<span class="badge red">Fehler: %s</span>' % e(st["test_error"])
-            elif pending:
-                state = "pr&uuml;ft Favoriten: noch %d von %d" % (pending, len(favs))
-                refresh = '<meta http-equiv="refresh" content="5">'
+                state = '<br><span class="badge red">Fehler: %s</span>' % e(st["test_error"])
             else:
-                state = "alle %d Favoriten gepr&uuml;ft" % len(favs)
-            test_html = ('<p><b>%s</b><br>%s</p><p>'
+                state = ""
+            test_html = ('<p><b>%s</b>%s</p><p>'
                          '<form method="post" action="api/model-promote" style="display:inline" '
                          'onsubmit="return confirm(\'Das Testmodell wird produktiv. Das bisherige kommt in den Ordner vorher. Fortfahren?\')">'
                          '<button>Test in Produktion setzen</button></form> '
@@ -1770,10 +1885,10 @@ class Board:
         else:
             test_html = '<p class="small">Kein Testmodell vorhanden.</p>'
         upload = ('<p><input type="file" id="mfile" accept=".onnx"> <button type="button" id="mup">Als Testmodell hochladen</button> '
-                  '<span id="mstat" class="small"></span><br><span class="small">Oder die Datei direkt in den Ordner <code>%s</code> legen '
+                  '<span id="mstat" class="small"></span><br><span class="small">Die Datei wird in St&uuml;cken zu 10 MB geladen und bei '
+                  'einem Abbruch beim n&auml;chsten Versuch fortgesetzt. Oder die Datei direkt in den Ordner <code>%s</code> legen '
                   "(das Add-on schaut alle 30 Sekunden nach). Ein neues Testmodell ersetzt das vorhandene.</span></p>" % e(_detect.TEST_DIR))
-        test_block = "<h2>Testmodell (nur Favoriten)</h2>" + test_html + upload
-        perf_block = self._perf_block(st)
+        test_block = ("<h2>Testmodell (nur Favoriten)</h2>" + test_html + '<div id="progw">' + self._favtest_block(st, favs) + "</div>" + upload)
         # Neu pruefen
         rc = st["recheck"]
         if rc["active"]:
@@ -1788,16 +1903,104 @@ class Board:
                        '<p class="small">Wertet alle Fotos mit dem produktiven Modell neu aus (etwa eine Sekunde pro Foto, niedrige Priorit&auml;t). '
                        "Das passiert nie von selbst.%s</p>" % fin)
         recheck_block = "<h2>Bestand neu pr&uuml;fen</h2>" + recheck
-        # Kontrolle Favoriten
+        live = '<div id="live" data-d="%d">%s%s</div>' % (1 if only_diff else 0, self._perf_block(st), self._control_html(st, favs, only_diff))
+        script = """<script>(function(){var b=document.getElementById('mup'),f=document.getElementById('mfile'),s=document.getElementById('mstat');
+var CH=10*1048576;
+function get(u,cb){var x=new XMLHttpRequest();x.open('GET',u);x.onload=function(){if(x.status===200)cb(x.responseText);};x.send();}
+if(b){b.onclick=function(){var fl=f.files[0];if(!fl){s.textContent='Bitte zuerst eine .onnx-Datei w\u00e4hlen.';return;}
+b.disabled=true;var uid=(fl.name+fl.size+fl.lastModified).replace(/[^A-Za-z0-9]/g,'').slice(-60);if(uid.length<6)uid='upload'+uid;
+var tot=fl.size,n=Math.ceil(tot/CH),fails=0;
+function fail(t){b.disabled=false;s.textContent=t;}
+function send(off){if(off>=tot){return fail('Upload unerwartet beendet.');}
+var end=Math.min(off+CH,tot),i=Math.floor(off/CH)+1,x=new XMLHttpRequest();x.open('POST','api/model-upload-chunk');
+x.setRequestHeader('X-Upload-Id',uid);x.setRequestHeader('X-Offset',String(off));x.setRequestHeader('X-Total-Size',String(tot));
+x.setRequestHeader('X-Filename',encodeURIComponent(fl.name));
+x.upload.onprogress=function(ev){if(ev.lengthComputable)s.textContent='Lade hoch ... St\u00fcck '+i+' von '+n+' \u00b7 '+Math.round((off+ev.loaded)*100/tot)+' %';};
+function retry(msg){fails++;if(fails>3){return fail(msg+' Nach 3 Wiederholungen aufgegeben. Beim n\u00e4chsten Versuch geht es ab hier weiter.');}
+s.textContent='St\u00fcck '+i+' von '+n+' wird wiederholt ('+fails+'/3) ...';setTimeout(function(){send(off);},1500);}
+x.onload=function(){var r={};try{r=JSON.parse(x.responseText);}catch(e){}
+if(x.status===200&&r.ok){fails=0;if(r.done){location.href='models?m='+encodeURIComponent(r.msg);}else{send(end);}}
+else if(x.status===409&&typeof r.received==='number'){send(r.received);}
+else if(x.status===200||(x.status>=400&&x.status<500&&x.status!==408&&x.status!==413)){fail(r.msg||('Fehler '+x.status));}
+else if(x.status===413&&r.msg&&r.msg.indexOf('Datei')===0){fail(r.msg);}
+else{retry(r.msg||('Fehler '+x.status+'.'));}};
+x.onerror=function(){retry('Verbindung unterbrochen.');};x.send(fl.slice(off,end));}
+get('api/model-upload-state?id='+uid,function(t){var r={};try{r=JSON.parse(t);}catch(e){}var got=(r.received||0);
+if(got>=tot)got=0;s.textContent=got?('Setze fort bei '+Math.round(got*100/tot)+' % ...'):'Lade hoch ...';send(got);});};}
+var pw=document.getElementById('progw'),lv=document.getElementById('live');if(!pw||!lv)return;
+var sig=(/data-sig="([^"]*)"/.exec(pw.innerHTML)||[])[1]||'';
+function tick(){if(document.hidden){setTimeout(tick,4000);return;}
+get('models?frag=prog',function(h){var m=/data-sig="([^"]*)"/.exec(h),act=/data-act="1"/.test(h);
+var lbo=document.getElementById('lb');if(lbo&&lbo.style.display==='flex'){setTimeout(tick,3000);return;}
+pw.innerHTML=h;
+if(m&&m[1]!==sig){sig=m[1];get('models?frag=live&d='+lv.getAttribute('data-d'),function(l){lv.innerHTML=l;});}
+setTimeout(tick,act?2000:5000);});}
+setTimeout(tick,2000);})();</script>"""
+        return self._models_shell(base, note + warn + prod_html + recheck_block + test_block + live + LIGHTBOX + script, refresh)
+
+    def _tile_src(self, r):
+        if self.store.preview_path(r["id"]):
+            return "mail/%d/preview" % r["id"]
+        if r["has_file"] and r["preview"] >= 0:
+            return "mail/%d/part/%d" % (r["id"], r["preview"])
+        return ""
+
+    def _favtest_block(self, st, favs):
+        """Stand des Favoriten-Tests mit dem Testmodell: Fortschritt, Zeiten, Button. Wird im Browser alle paar Sekunden ersetzt."""
+        if not st["test_path"]:
+            return '<div id="prog" data-sig="none" data-act="0"></div>'
+        f = st["favtest"]
+        now = time.time()
+        mmss = lambda sec: "%d:%02d" % (int(max(0, sec)) // 60, int(max(0, sec)) % 60)
+        sig = "%d:%d:%d:%s" % (1 if f["active"] else 0, f["done"], int(f["finished"]), f["tag"])
+        if f["active"]:
+            done, total = f["done"], f["total"]
+            avg = (f["ms_sum"] / f["n"]) if f["n"] else 0
+            phase = "Modell wird geladen &hellip;" if (f["loading"] and not f["n"]) else "pr&uuml;ft Foto %d von %d" % (min(done + 1, total), total)
+            line = "Vergangen %s" % mmss(now - f["started"])
+            if avg:
+                line += " &middot; &Oslash; %s pro Foto &middot; Rest etwa %s" % (self._sec(avg), mmss(max(0, total - done) * avg / 1000.0))
+            cur = ""
+            row = next((r for r in favs if r["id"] == f["cur"]), None)
+            if row is not None:
+                cam = self.store.camera_map().get(row["camera"])
+                title = (self._cam_title(cam["revier"], cam["name"]) if cam else "") or (row["camera"] or "").split("@")[0] or "Kamera"
+                src = self._tile_src(row)
+                cur = ('<div class="small" style="margin-top:6px">%s Gerade: %s, %s</div>'
+                       % ('<img src="%s" alt="" style="height:54px;border-radius:6px;vertical-align:middle;margin-right:8px">' % src if src else "",
+                          e(title), e(time.strftime("%d.%m.%y %H:%M", time.localtime(row["received"])))))
+            body = ('<p><b>%s</b> <progress max="%d" value="%d"></progress></p><p class="small">%s</p>%s'
+                    '<form method="post" action="api/model-favtest-cancel"><button>Abbrechen</button></form>'
+                    % (phase, max(1, total), done, line, cur))
+        else:
+            if favs:
+                body = ('<form method="post" action="api/model-favtest"><button>Favoriten jetzt pr&uuml;fen</button></form>'
+                        '<p class="small">Rechnet alle %d Favoriten mit dem Testmodell neu, auch wenn sie schon ein Ergebnis haben '
+                        "(sinnvoll nach einer &Auml;nderung der Threads).</p>" % len(favs))
+            else:
+                body = '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'
+            if f["finished"] and f["total"]:
+                mem = st["mem"].get(st["test_tag"], {})
+                took = f["finished"] - f["started"]
+                if f["cancelled"]:
+                    last = "abgebrochen nach %d von %d Fotos" % (f["done"], f["total"])
+                else:
+                    last = "%d Fotos in %s" % (f["total"], mmss(took))
+                    if f["n"]:
+                        last += " &middot; &Oslash; %s pro Foto" % self._sec(f["ms_sum"] / f["n"])
+                    if mem:
+                        last += " &middot; Arbeitsspeicher +%d MB Spitze" % mem.get("peak_mb", 0)
+                body += '<p class="small">Letzter Lauf (%s): %s</p>' % (e(time.strftime("%d.%m. %H:%M", time.localtime(f["finished"]))), last)
+        return '<div id="prog" data-sig="%s" data-act="%d">%s</div>' % (e(sig), 1 if f["active"] else 0, body)
+
+    def _control_html(self, st, favs, only_diff):
+        """Kontrolle Favoriten: Kacheln mit Ergebnis von bisher und Test."""
         cams = self.store.camera_map()
         tiles, n_test, n_same = [], 0, 0
         for r in favs:
             mail_id = r["id"]
-            if self.store.preview_path(mail_id):
-                src = "mail/%d/preview" % mail_id
-            elif r["has_file"] and r["preview"] >= 0:
-                src = "mail/%d/part/%d" % (mail_id, r["preview"])
-            else:
+            src = self._tile_src(r)
+            if not src:
                 continue
             active = test_active(r)
             same = active and r["det_label"] == r["test_label"]
@@ -1832,16 +2035,8 @@ class Board:
         else:
             summary = "%d Favoriten (noch kein Testmodell)" % len(favs)
             toggle = ""
-        control = ('<h2>Kontrolle: Favoriten</h2><p class="small">%s %s</p><div class="grid">%s</div>'
-                   % (e(summary), toggle, "".join(tiles) or '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'))
-        script = """<script>(function(){var b=document.getElementById('mup'),f=document.getElementById('mfile'),s=document.getElementById('mstat');
-if(!b)return;b.onclick=function(){var fl=f.files[0];if(!fl){s.textContent='Bitte zuerst eine .onnx-Datei w\u00e4hlen.';return;}
-b.disabled=true;var x=new XMLHttpRequest();x.open('POST','api/model-upload');x.setRequestHeader('X-Filename',encodeURIComponent(fl.name));
-x.upload.onprogress=function(ev){if(ev.lengthComputable)s.textContent='Lade hoch ... '+Math.round(ev.loaded*100/ev.total)+' %';};
-x.onload=function(){var r={};try{r=JSON.parse(x.responseText);}catch(e){}b.disabled=false;
-if(x.status===200&&r.ok){location.href='models?m='+encodeURIComponent(r.msg);}else{s.textContent=(r.msg||('Fehler '+x.status));}};
-x.onerror=function(){b.disabled=false;s.textContent='Upload fehlgeschlagen (Verbindung).';};x.send(fl);};})();</script>"""
-        return self._models_shell(base, note + warn + prod_html + test_block + perf_block + recheck_block + control + LIGHTBOX + script, refresh)
+        return ('<h2>Kontrolle: Favoriten</h2><p class="small">%s %s</p><div class="grid">%s</div>'
+                % (e(summary), toggle, "".join(tiles) or '<p class="small">Noch keine Favoriten. Im gro&szlig;en Bild &#9734; antippen.</p>'))
 
     def _models_shell(self, base, body, refresh):
         return (

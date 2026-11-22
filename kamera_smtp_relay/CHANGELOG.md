@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.4
+
+- Modelle: Upload in Stücken zu 10 MB (der Home-Assistant-Zugang lehnt große Einzel-Uploads mit Fehler 413 ab). Fehlgeschlagene Stücke werden bis zu dreimal wiederholt, ein abgebrochener Upload wird beim nächsten Versuch mit derselben Datei fortgesetzt; Anzeige „Stück 5 von 12 · 42 %“
+- Modelle: Knopf „Favoriten jetzt prüfen“ rechnet alle Favoriten mit dem Testmodell neu (z. B. nach einer Änderung der Threads), mit „Abbrechen“
+- Modelle: Fortschrittsblock für den Favoriten-Test mit aktuellem Foto, vergangener Zeit, Zeit pro Foto und geschätzter Restzeit; die Seite aktualisiert sich dabei selbst (ohne Neuladen), die Kacheln füllen sich live; nach dem Lauf steht eine Zusammenfassung (Dauer, Zeit pro Foto, Arbeitsspeicher)
+
 ## 1.1.3
 
 - Modelle: Leistungsmessung. Reiter „Modelle“ zeigt je Modell (Produktiv, Test) die Zeit pro Foto (Mittel und längste), die Thread-Zahl, den Arbeitsspeicher (Zuwachs beim Laden und Spitze) und eine Hochrechnung der Rechenzeit pro Tag; beim Testmodell zusätzlich der Vergleich auf denselben Favoriten („x-mal so lang“)
