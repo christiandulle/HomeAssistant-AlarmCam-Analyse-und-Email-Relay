@@ -1968,7 +1968,7 @@ class Board:
                 "Messungen vor 1.1.3 fehlen.</p>" % ("".join(trs), note, e(str(st["threads"])), per_day))
 
     FLT_MODELS = (("det", "Produktiv"), ("test", "Test"))
-    FLT_ARTS = (("fp", "Fehlalarm"), ("miss", "\u00dcbersehen"), ("ok", "Richtig"))
+    FLT_ARTS = (("nf", "Nicht weitergeleitet"), ("lw", "Leer weitergeleitet"), ("fp", "Fehlalarm"), ("miss", "\u00dcbersehen"), ("ok", "Richtig"))
     FLT_CLASSES = (("mensch", "Mensch"), ("tier", "Tier"), ("fahrzeug", "Fahrzeug"))
 
     @classmethod
@@ -1984,7 +1984,18 @@ class Board:
         return "".join("&%s=%s" % (k, flt[v]) for k, v in (("fm", "m"), ("fa", "a"), ("fk", "k")) if flt and flt.get(v))
 
     @staticmethod
-    def _flt_match(flt, truth, v_det, v_test):
+    def _fwd_state(truth, found):
+        """"nf" = nicht weitergeleitet, obwohl etwas da ist; "lw" = weitergeleitet, obwohl leer; sonst "" (Weiterleitung stimmt)."""
+        if truth is None or found is None:
+            return ""
+        if truth and not found:
+            return "nf"
+        if not truth and found:
+            return "lw"
+        return ""
+
+    @staticmethod
+    def _flt_match(flt, truth, v_det, v_test, fw_det="", fw_test="", f_det=None, f_test=None):
         """Passt die Kachel zum Filter? Art und Klasse beurteilen nur Fotos mit eigenem Label."""
         if not (flt["a"] or flt["k"]):
             return True
@@ -1995,8 +2006,13 @@ class Board:
             if v is None:
                 continue
             ok, fp, miss = v
+            fw, found = (fw_det, f_det) if which == "det" else (fw_test, f_test)
             k, a = flt["k"], flt["a"]
-            if a == "fp":
+            if a == "nf":
+                hit = fw == "nf" and (not k or k in truth)
+            elif a == "lw":
+                hit = fw == "lw" and (not k or k in (found or set()))
+            elif a == "fp":
                 hit = (k in fp) if k else bool(fp)
             elif a == "miss":
                 hit = (k in miss) if k else bool(miss)
@@ -2145,12 +2161,12 @@ function data(){var el=document.getElementById('simdata');if(!el)return {};try{r
 function simAll(){var D=data();[].forEach.call(document.querySelectorAll('.simout'),function(out){var w=out.getAttribute('data-w'),form=out.parentNode,d=D[w];
 if(!d||!d.n){out.innerHTML='Noch keine Werte zum Nachrechnen: Favoriten labeln und mit diesem Modell pr\u00fcfen.';return;}
 var thr={},i;for(i=0;i<3;i++){var inp=form.querySelector('input[name='+NAMES[i]+']');thr[NAMES[i]]=parseInt(inp.value,10)||0;}
-var parts=[],right=0,k,cost=0;
-d.s.forEach(function(r){var ok=true,any=false,fpn=0,msn=0;for(k=0;k<3;k++){var f=r[3+k]>=thr[NAMES[k]];if(f)any=true;if(f&&!r[k]){fpn++;ok=false;}else if(r[k]&&!f){msn++;ok=false;}}if(ok)right++;cost+=fpn+msn*(any?0.5:2);});
+var parts=[],right=0,k,cost=0,nf=0,nc=0,lw=0,ne=0;
+d.s.forEach(function(r){var ok=true,any=false,fpn=0,msn=0,truthAny=r[0]||r[1]||r[2];for(k=0;k<3;k++){var f=r[3+k]>=thr[NAMES[k]];if(f)any=true;if(f&&!r[k]){fpn++;ok=false;}else if(r[k]&&!f){msn++;ok=false;}}if(ok)right++;cost+=fpn+msn*(any?0.5:2);if(truthAny){nc++;if(!any)nf++;}else{ne++;if(any)lw++;}});
 for(k=0;k<3;k++){var fp=0,ms=0;d.s.forEach(function(r){var f=r[3+k]>=thr[NAMES[k]];if(f&&!r[k])fp++;else if(r[k]&&!f)ms++;});
 parts.push(LAB[NAMES[k]]+': Fehlalarm <b>'+fp+'</b> \u00b7 \u00fcbersehen <b>'+ms+'</b>');}
 var rec=d.r||{};var same=NAMES.every(function(n){return rec[n]===thr[n];});
-out.innerHTML=parts.join('<br>')+'<br><b>'+right+' von '+d.n+'</b> Fotos richtig \u00b7 Kosten '+String(cost).replace('.',',')+' (bei diesen Schwellen, noch nicht gespeichert)<br>Empfehlung: '+NAMES.map(function(n){return LAB[n]+' '+rec[n]+' %';}).join(', ')+(same?'':' <button type="button" class="recbtn">Empfehlung eintragen</button>');
+out.innerHTML='<b style="color:#d32f2f">Nicht weitergeleitet: '+nf+' von '+nc+'</b><br><b style="color:#f26a1b">Leer weitergeleitet: '+lw+' von '+ne+'</b><br>'+parts.join('<br>')+'<br><b>'+right+' von '+d.n+'</b> Fotos richtig \u00b7 Kosten '+String(cost).replace('.',',')+' (bei diesen Schwellen, noch nicht gespeichert)<br>Empfehlung: '+NAMES.map(function(n){return LAB[n]+' '+rec[n]+' %';}).join(', ')+(same?'':' <button type="button" class="recbtn">Empfehlung eintragen</button>');
 var b=out.querySelector('.recbtn');if(b)b.onclick=function(){NAMES.forEach(function(n){form.querySelector('input[name='+n+']').value=rec[n];});simAll();};});}
 window.simAll=simAll;
 document.addEventListener('input',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('.simout')===null&&ev.target.closest('form[action$="model-thresholds"]'))simAll();});
@@ -2316,15 +2332,32 @@ simAll();})();</script>"""
 
         tally = lambda pre: self._tally(labeled, pre)
 
-        def line(name, t):
+        def fwd(pre):
+            nf = n_content = lw = n_empty = 0
+            for r in labeled:
+                truth, found = self._truth(r), self._found(r, pre)
+                if found is None:
+                    continue
+                if truth:
+                    n_content += 1
+                    nf += 1 if not found else 0
+                else:
+                    n_empty += 1
+                    lw += 1 if found else 0
+            return nf, n_content, lw, n_empty
+
+        def line(name, t, pre):
             n, ok_n, fp_n, miss_n = t
             if not n:
                 return "%s: noch keine Ergebnisse" % name
-            return "%s <b>%d von %d richtig</b> (%d mit Fehlalarm, %d mit &uuml;bersehenem)" % (name, ok_n, n, fp_n, miss_n)
+            nf, nc, lw, ne = fwd(pre)
+            return ("%s <b>%d von %d richtig</b> (%d mit Fehlalarm, %d mit &uuml;bersehenem) &middot; "
+                    "<b style=\"color:#d32f2f\">nicht weitergeleitet %d von %d</b> &middot; <b style=\"color:#f26a1b\">leer weitergeleitet %d von %d</b>"
+                    % (name, ok_n, n, fp_n, miss_n, nf, nc, lw, ne))
 
-        parts = [line("Produktiv", tally("det"))]
+        parts = [line("Produktiv", tally("det"), "det")]
         if st["test_path"]:
-            parts.append(line("Test", tally("test")))
+            parts.append(line("Test", tally("test"), "test"))
         n_leer = sum(1 for r in labeled if not self._truth(r))
         tip = ""
         if n_leer < 5:
@@ -2348,16 +2381,20 @@ simAll();})();</script>"""
                 n_test += 1
                 n_same += 1 if same else 0
             truth = self._truth(r)
-            v_det = self._verdict(truth, self._found(r, "det"))
-            v_test = self._verdict(truth, self._found(r, "test"))
+            f_det, f_test = self._found(r, "det"), self._found(r, "test")
+            v_det = self._verdict(truth, f_det)
+            v_test = self._verdict(truth, f_test)
+            fw_det, fw_test = self._fwd_state(truth, f_det), self._fwd_state(truth, f_test)
             if truth is not None:
                 bad = any(v is not None and not v[0] for v in (v_det, v_test))
             else:
                 bad = active and not same
             if only_diff and not bad:
                 continue
-            if not self._flt_match(flt, truth, v_det, v_test):
+            if not self._flt_match(flt, truth, v_det, v_test, fw_det, fw_test, f_det, f_test):
                 continue
+            # Rahmen: rot = nicht weitergeleitet, obwohl etwas da ist; orange = weitergeleitet, obwohl leer; gelb = nur Label-Fehler
+            frame = " diffr" if "nf" in (fw_det, fw_test) else " diffo" if "lw" in (fw_det, fw_test) else " diffc" if bad else ""
             n_shown += 1
             cam = cams.get(r["camera"])
             title = self._cam_title(cam["revier"], cam["name"]) if cam else ""
@@ -2391,7 +2428,7 @@ simAll();})();</script>"""
             tiles.append(
                 '<div class="gc%s"><a href="%s" class="zoom" %s><img loading="lazy" src="%s" alt=""><span class="fv">&#9733;</span></a>'
                 '<div class="t">%s</div>%s%s<div class="lrow" data-id="%d" data-lbl="%s">%s</div></div>'
-                % (" diffc" if bad else "", src, zoom_attrs(r, cap, True), src, e(title), line1, line2, mail_id, e(cur), btns))
+                % (frame, src, zoom_attrs(r, cap, True), src, e(title), line1, line2, mail_id, e(cur), btns))
         if st["test_path"]:
             summary = "%d Favoriten, %d mit Testergebnis, %d gleich, %d abweichend" % (len(favs), n_test, n_same, n_test - n_same)
         else:
@@ -2418,7 +2455,10 @@ simAll();})();</script>"""
         groups = [("Modell", "m", models), ("Art", "a", self.FLT_ARTS), ("Klasse", "k", self.FLT_CLASSES)]
         rows = "".join('<span class="small">%s:</span> %s &nbsp; ' % (name, "".join(chip(key, v, lab) for v, lab in opts))
                        for name, key, opts in groups)
-        return '<p class="flt">%s<span class="small">(Art und Klasse beurteilen nur Fotos mit deinem Label)</span></p>' % rows
+        return ('<p class="flt">%s<span class="small">(Art und Klasse beurteilen nur Fotos mit deinem Label)</span></p>'
+                '<p class="small">Rahmen: <b style="color:#d32f2f">rot</b> = nicht weitergeleitet, obwohl etwas da ist &middot; '
+                '<b style="color:#f26a1b">orange</b> = weitergeleitet, obwohl leer (Fehlalarm) &middot; '
+                '<b style="color:#d99a1f">gelb</b> = nur ein Label falsch oder die Modelle sind uneinig</p>' % rows)
 
     def _tune_data(self, st, favs):
         """Je Modell die Fotos mit Label und gemerkten Werten: Grundlage fuer Empfehlung und Simulation."""
@@ -2452,8 +2492,11 @@ simAll();})();</script>"""
                 rows.append('<tr><td>%s</td><td colspan="2" class="small">noch keine Werte (Favoriten neu pr&uuml;fen, Labels setzen)</td></tr>' % name)
                 continue
             S = d["samples"]
-            cell = lambda thr: "<b>%d von %d</b> richtig &middot; Fehlalarm %d &middot; &uuml;bersehen %d &middot; Kosten %s" % (
-                (_tune.photos_right(S, thr), d["n"]) + _tune.total_cost(S, thr)[:2] + (("%.1f" % _tune.total_cost(S, thr)[2]).replace(".", ","),))
+            cell = lambda thr: (
+                '<b style="color:#d32f2f">Nicht weitergeleitet: %d von %d</b><br><b style="color:#f26a1b">Leer weitergeleitet: %d von %d</b><br>'
+                '<span class="small">%d von %d richtig &middot; Fehlalarm %d &middot; &uuml;bersehen %d &middot; Kosten %s</span>' % (
+                    _tune.forwarding(S, thr) + (_tune.photos_right(S, thr), d["n"]) + _tune.total_cost(S, thr)[:2]
+                    + (("%.1f" % _tune.total_cost(S, thr)[2]).replace(".", ","),)))
             fmt = lambda thr: ", ".join("%s %d %%" % (lab, thr[k]) for k, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug")))
             rows.append("<tr><td>%s</td><td>jetzt (%s):<br>%s</td><td>beste (%s):<br>%s</td></tr>"
                         % (name, e(fmt(d["cur"])), cell(d["cur"]), e(fmt(d["rec"])), cell(d["rec"])))
@@ -2467,7 +2510,7 @@ simAll();})();</script>"""
                 note += " F&uuml;r %d gelabelte Favoriten fehlen beim Modell &bdquo;%s&ldquo; die Werte (Favoriten neu pr&uuml;fen)." % (d["labeled"] - d["n"], name)
         few = " Bei so wenigen Fotos ist die Empfehlung nur eine Orientierung." if any(d["n"] < 20 for d in data.values() if d["n"]) else ""
         html_ = ('<table class="tune"><tr><th></th><th>aktuelle Schwellen</th><th>beste Schwellen nach deinen Labels</th></tr>%s</table>'
-                 '<p class="small">Gez&auml;hlt wird pro Foto. Kosten: Fehlalarm 1; &uuml;bersehen 2, wenn auf dem Foto gar nichts gemeldet wird, sonst nur 0,5 (die Mail geht trotzdem raus). '
+                 '<p class="small">Gez&auml;hlt wird pro Foto. Die Empfehlung richtet sich zuerst nach der Weiterleitung (nicht weitergeleitet z&auml;hlt 2, leer weitergeleitet 1), bei Gleichstand nach den Klassen (Fehlalarm 1; &uuml;bersehen 2, wenn auf dem Foto gar nichts gemeldet wird, sonst 0,5). '
                  'Schwellen stellst du oben beim jeweiligen Modell ein; dort siehst du die Wirkung sofort.%s%s</p>' % ("".join(rows), note, few))
         return html_, json.dumps(js, separators=(",", ":"))
 
@@ -2476,7 +2519,7 @@ simAll();})();</script>"""
             '<!doctype html><html lang="de"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width,initial-scale=1">%s'
             '<base href="%s"><title>Modelle</title><style>%s'
-            ".diff{color:#d9822b;font-weight:700}.diffc{outline:2px solid #f5a524;border-radius:8px}"
+            ".diff{color:#d9822b;font-weight:700}.diffc{outline:2px solid #f5a524;border-radius:8px}.diffo{outline:3px solid #f26a1b;border-radius:8px}.diffr{outline:3px solid #d32f2f;border-radius:8px}"
             ".chip{display:inline-block;padding:3px 10px;border:1px solid #b9c2cc;border-radius:14px;margin:2px 3px 2px 0;text-decoration:none;color:inherit;font-size:13px}"
             ".chip.on{background:#6e9a35;color:#fff;border-color:#6e9a35}.flt{line-height:2}"
             ".tune{border-collapse:collapse;margin:6px 0}.tune td,.tune th{border:1px solid #d5dbe1;padding:4px 8px;text-align:left;vertical-align:top;font-size:13px}"

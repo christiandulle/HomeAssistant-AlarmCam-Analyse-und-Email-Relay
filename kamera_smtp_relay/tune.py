@@ -66,6 +66,25 @@ def total_cost(samples, thr):
     return fp, miss, cost
 
 
+FWD_COST_NOT = 2   # nicht weitergeleitet, obwohl etwas da ist
+FWD_COST_EMPTY = 1  # weitergeleitet, obwohl das Foto leer ist
+
+
+def forwarding(samples, thr):
+    """Weiterleitung bei den Schwellen thr: (nicht weitergeleitet, Fotos mit Inhalt, leer weitergeleitet, leere Fotos).
+    Weitergeleitet wird, wenn mindestens eine Klasse gemeldet wird."""
+    nf = lw = n_content = n_empty = 0
+    for truth, conf in samples:
+        found = any(conf[k] >= thr[CLASSES[k]] for k in range(3))
+        if any(truth):
+            n_content += 1
+            nf += 0 if found else 1
+        else:
+            n_empty += 1
+            lw += 1 if found else 0
+    return nf, n_content, lw, n_empty
+
+
 def photos_right(samples, thr):
     """Anzahl Fotos, bei denen alle drei Klassen stimmen, wenn die Schwellen thr (Prozent je Klasse) gelten."""
     return sum(1 for truth, conf in samples if photo_cost(truth, conf, thr)[:2] == (0, 0))
@@ -93,11 +112,13 @@ def recommend(samples, cur):
         return thr
 
     def slice_costs(c):
+        # zuerst zaehlt die Weiterleitung (nicht weitergeleitet 2, leer weitergeleitet 1), bei Gleichstand die Klassen-Kosten
         t = dict(thr)
         out = []
         for pct in range(MIN_PCT, MAX_PCT + 1):
             t[c] = pct
-            out.append(total_cost(samples, t)[2])
+            nf, _n, lw, _e = forwarding(samples, t)
+            out.append((FWD_COST_NOT * nf + FWD_COST_EMPTY * lw, total_cost(samples, t)[2]))
         return out
 
     for _ in range(12):

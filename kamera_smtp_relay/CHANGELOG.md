@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- Kontrolle: Zwei Weiterleitungs-Kennzahlen je Modell: **„nicht weitergeleitet, obwohl etwas da ist“** (Label mit Inhalt, Modell meldet nichts) und **„leer weitergeleitet“** (Label „Leer“, Modell meldet etwas). Weitergeleitet heißt: mindestens eine Klasse wird gemeldet. Die Zahlen stehen in „Gegen deine Labels“, im Schwellen-Vergleich (aktuelle und beste Schwellen) und in der Live-Nachrechnung bei den Schwellen-Feldern
+- Kontrolle: **Rahmen der Kacheln**: rot = nicht weitergeleitet, obwohl etwas da ist; orange = weitergeleitet, obwohl leer (Fehlalarm); gelb = nur ein Label falsch (z. B. Auto nicht erkannt, aber die Mail geht raus) oder die Modelle sind uneinig. Mit Legende
+- Kontrolle: zwei neue Filter **„Nicht weitergeleitet“** und **„Leer weitergeleitet“** (kombinierbar mit Modell und Klasse)
+- Schwellen-Empfehlung richtet sich zuerst nach der Weiterleitung (nicht weitergeleitet zählt 2, leer weitergeleitet 1), bei Gleichstand nach den Klassen-Kosten wie bisher
+
 ## 1.1.9
 
 - Schwellen-Empfehlung: **neue Gewichtung der Fehler**. Fehlalarm zählt 1. Ein übersehenes Objekt zählt **2**, wenn auf dem Foto gar nichts gemeldet wird (das Foto gilt als leer, die Mail geht eventuell nicht raus), aber nur **0,5**, wenn auf dem Foto eine andere Klasse gemeldet wird (z. B. Person erkannt, Auto nicht: die Mail geht trotzdem raus)
