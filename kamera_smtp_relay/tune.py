@@ -6,8 +6,9 @@ Das Label gilt pro Foto (Klasse da oder nicht); gezaehlt wird also pro Foto und 
 """
 
 CLASSES = ("tier", "mensch", "fahrzeug")
-COST_FP = 1      # Fehlalarm: etwas gemeldet, was nicht da ist
-COST_MISS = 2    # uebersehen zaehlt doppelt (so von Christian festgelegt)
+COST_FP = 1                # Fehlalarm: etwas gemeldet, was nicht da ist
+COST_MISS_ALONE = 2        # uebersehen, und auf dem Foto wird gar nichts gemeldet: Foto gilt als leer, Mail geht evtl. nicht raus
+COST_MISS_WITH_OTHER = 0.5  # uebersehen, aber eine andere Klasse wird gemeldet (Person erkannt, Auto nicht): Mail geht trotzdem raus
 MIN_PCT, MAX_PCT = 10, 95
 
 
@@ -42,47 +43,79 @@ def errors(samples, k, pct):
     return fp, miss
 
 
-def cost(fp, miss):
-    return COST_FP * fp + COST_MISS * miss
+def photo_cost(truth, conf, thr):
+    """Ein Foto bei den Schwellen thr (Prozent je Klasse): (Fehlalarme, uebersehen, Kosten).
+    Ein uebersehenes Objekt kostet wenig, wenn auf dem Foto sonst etwas gemeldet wird (auch Falsches: die Mail geht raus),
+    und viel, wenn das Foto dadurch als leer gilt."""
+    found = [conf[k] >= thr[CLASSES[k]] for k in range(3)]
+    any_found = any(found)
+    fp = sum(1 for k in range(3) if found[k] and not truth[k])
+    miss = sum(1 for k in range(3) if truth[k] and not found[k])
+    return fp, miss, COST_FP * fp + miss * (COST_MISS_WITH_OTHER if any_found else COST_MISS_ALONE)
 
 
-def best(samples, k, current=None):
-    """Beste Schwelle fuer Klasse k: geringste Kosten; bei mehreren gleich guten die in der Mitte der laengsten gleich guten Strecke.
-    Gibt (Schwelle, Fehlalarme, uebersehen) zurueck oder None ohne Fotos."""
-    if not samples:
-        return None
-    table = []
-    for pct in range(MIN_PCT, MAX_PCT + 1):
-        fp, miss = errors(samples, k, pct)
-        table.append((pct, fp, miss, cost(fp, miss)))
-    low = min(t[3] for t in table)
-    runs, run = [], []
-    for t in table:
-        if t[3] == low:
-            run.append(t)
-        elif run:
-            runs.append(run)
-            run = []
-    if run:
-        runs.append(run)
-    longest = max(runs, key=len)   # bei gleicher Laenge die erste (niedrigere Schwelle: lieber empfindlicher)
-    pick = longest[(len(longest) - 1) // 2]
-    return pick[0], pick[1], pick[2]
+def total_cost(samples, thr):
+    """Alle Fotos: (Fehlalarme, uebersehen, gewichtete Kosten)."""
+    fp = miss = 0
+    cost = 0.0
+    for truth, conf in samples:
+        a, b, c = photo_cost(truth, conf, thr)
+        fp += a
+        miss += b
+        cost += c
+    return fp, miss, cost
 
 
 def photos_right(samples, thr):
     """Anzahl Fotos, bei denen alle drei Klassen stimmen, wenn die Schwellen thr (Prozent je Klasse) gelten."""
-    n = 0
-    for truth, conf in samples:
-        if all((conf[k] >= thr[CLASSES[k]]) == bool(truth[k]) for k in range(3)):
-            n += 1
-    return n
+    return sum(1 for truth, conf in samples if photo_cost(truth, conf, thr)[:2] == (0, 0))
 
 
-def total_cost(samples, thr):
-    fp = miss = 0
-    for k, c in enumerate(CLASSES):
-        a, b = errors(samples, k, thr[c])
-        fp += a
-        miss += b
-    return fp, miss, cost(fp, miss)
+def _runs(costs):
+    """Zusammenhaengende Strecken (Start-, Endindex) mit den geringsten Kosten."""
+    low = min(costs)
+    runs, start = [], None
+    for i, c in enumerate(costs + [None]):
+        if c == low and start is None:
+            start = i
+        elif c != low and start is not None:
+            runs.append((start, i - 1))
+            start = None
+    return low, runs
+
+
+def recommend(samples, cur):
+    """Beste Schwellen (Prozent je Klasse) nach den eigenen Labels. Die Kosten einer Klasse haengen von den Schwellen der anderen ab
+    (uebersehen ist billiger, wenn etwas anderes gemeldet wird); deshalb wird reihum verbessert, bis sich nichts mehr lohnt, und
+    zuletzt jede Schwelle in die Mitte ihrer besten Strecke gesetzt (robuster gegen Ausreisser). Ohne Fotos bleibt cur."""
+    thr = {c: min(MAX_PCT, max(MIN_PCT, int(cur.get(c, 30)))) for c in CLASSES}
+    if not samples:
+        return thr
+
+    def slice_costs(c):
+        t = dict(thr)
+        out = []
+        for pct in range(MIN_PCT, MAX_PCT + 1):
+            t[c] = pct
+            out.append(total_cost(samples, t)[2])
+        return out
+
+    for _ in range(12):
+        changed = False
+        for c in CLASSES:
+            costs = slice_costs(c)
+            low, runs = _runs(costs)
+            if costs[thr[c] - MIN_PCT] > low:   # lohnt sich: laengste beste Strecke, davon die Mitte
+                a, b = max(runs, key=lambda r: r[1] - r[0])
+                thr[c] = MIN_PCT + (a + b) // 2
+                changed = True
+        if not changed:
+            break
+    for c in CLASSES:   # Mitte der besten Strecke, in der die Schwelle schon liegt (Kosten bleiben gleich)
+        costs = slice_costs(c)
+        low, runs = _runs(costs)
+        for a, b in runs:
+            if a <= thr[c] - MIN_PCT <= b:
+                thr[c] = MIN_PCT + (a + b) // 2
+                break
+    return thr

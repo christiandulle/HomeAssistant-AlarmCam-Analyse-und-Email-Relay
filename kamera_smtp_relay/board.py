@@ -2145,12 +2145,12 @@ function data(){var el=document.getElementById('simdata');if(!el)return {};try{r
 function simAll(){var D=data();[].forEach.call(document.querySelectorAll('.simout'),function(out){var w=out.getAttribute('data-w'),form=out.parentNode,d=D[w];
 if(!d||!d.n){out.innerHTML='Noch keine Werte zum Nachrechnen: Favoriten labeln und mit diesem Modell pr\u00fcfen.';return;}
 var thr={},i;for(i=0;i<3;i++){var inp=form.querySelector('input[name='+NAMES[i]+']');thr[NAMES[i]]=parseInt(inp.value,10)||0;}
-var parts=[],right=0,k;
-d.s.forEach(function(r){var ok=true;for(k=0;k<3;k++){if(((r[3+k]>=thr[NAMES[k]])?1:0)!==r[k])ok=false;}if(ok)right++;});
+var parts=[],right=0,k,cost=0;
+d.s.forEach(function(r){var ok=true,any=false,fpn=0,msn=0;for(k=0;k<3;k++){var f=r[3+k]>=thr[NAMES[k]];if(f)any=true;if(f&&!r[k]){fpn++;ok=false;}else if(r[k]&&!f){msn++;ok=false;}}if(ok)right++;cost+=fpn+msn*(any?0.5:2);});
 for(k=0;k<3;k++){var fp=0,ms=0;d.s.forEach(function(r){var f=r[3+k]>=thr[NAMES[k]];if(f&&!r[k])fp++;else if(r[k]&&!f)ms++;});
 parts.push(LAB[NAMES[k]]+': Fehlalarm <b>'+fp+'</b> \u00b7 \u00fcbersehen <b>'+ms+'</b>');}
 var rec=d.r||{};var same=NAMES.every(function(n){return rec[n]===thr[n];});
-out.innerHTML=parts.join('<br>')+'<br><b>'+right+' von '+d.n+'</b> Fotos richtig (bei diesen Schwellen, noch nicht gespeichert)<br>Empfehlung: '+NAMES.map(function(n){return LAB[n]+' '+rec[n]+' %';}).join(', ')+(same?'':' <button type="button" class="recbtn">Empfehlung eintragen</button>');
+out.innerHTML=parts.join('<br>')+'<br><b>'+right+' von '+d.n+'</b> Fotos richtig \u00b7 Kosten '+String(cost).replace('.',',')+' (bei diesen Schwellen, noch nicht gespeichert)<br>Empfehlung: '+NAMES.map(function(n){return LAB[n]+' '+rec[n]+' %';}).join(', ')+(same?'':' <button type="button" class="recbtn">Empfehlung eintragen</button>');
 var b=out.querySelector('.recbtn');if(b)b.onclick=function(){NAMES.forEach(function(n){form.querySelector('input[name='+n+']').value=rec[n];});simAll();};});}
 window.simAll=simAll;
 document.addEventListener('input',function(ev){if(ev.target&&ev.target.closest&&ev.target.closest('.simout')===null&&ev.target.closest('form[action$="model-thresholds"]'))simAll();});
@@ -2436,11 +2436,7 @@ simAll();})();</script>"""
                 labeled += 1
                 if sim_ok(r, pre):
                     samples.append(_tune.sample(truth, r[pre + "_low"]))
-            rec = dict(cur)
-            for k, c in enumerate(_tune.CLASSES):
-                b = _tune.best(samples, k)
-                if b:
-                    rec[c] = b[0]
+            rec = _tune.recommend(samples, cur)
             out[pre] = {"n": len(samples), "labeled": labeled, "samples": samples, "cur": cur, "rec": rec}
         return out
 
@@ -2456,8 +2452,8 @@ simAll();})();</script>"""
                 rows.append('<tr><td>%s</td><td colspan="2" class="small">noch keine Werte (Favoriten neu pr&uuml;fen, Labels setzen)</td></tr>' % name)
                 continue
             S = d["samples"]
-            cell = lambda thr: "<b>%d von %d</b> richtig &middot; Fehlalarm %d &middot; &uuml;bersehen %d" % (
-                (_tune.photos_right(S, thr), d["n"]) + _tune.total_cost(S, thr)[:2])
+            cell = lambda thr: "<b>%d von %d</b> richtig &middot; Fehlalarm %d &middot; &uuml;bersehen %d &middot; Kosten %s" % (
+                (_tune.photos_right(S, thr), d["n"]) + _tune.total_cost(S, thr)[:2] + (("%.1f" % _tune.total_cost(S, thr)[2]).replace(".", ","),))
             fmt = lambda thr: ", ".join("%s %d %%" % (lab, thr[k]) for k, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug")))
             rows.append("<tr><td>%s</td><td>jetzt (%s):<br>%s</td><td>beste (%s):<br>%s</td></tr>"
                         % (name, e(fmt(d["cur"])), cell(d["cur"]), e(fmt(d["rec"])), cell(d["rec"])))
@@ -2471,7 +2467,7 @@ simAll();})();</script>"""
                 note += " F&uuml;r %d gelabelte Favoriten fehlen beim Modell &bdquo;%s&ldquo; die Werte (Favoriten neu pr&uuml;fen)." % (d["labeled"] - d["n"], name)
         few = " Bei so wenigen Fotos ist die Empfehlung nur eine Orientierung." if any(d["n"] < 20 for d in data.values() if d["n"]) else ""
         html_ = ('<table class="tune"><tr><th></th><th>aktuelle Schwellen</th><th>beste Schwellen nach deinen Labels</th></tr>%s</table>'
-                 '<p class="small">Gez&auml;hlt wird pro Foto; &uuml;bersehen z&auml;hlt doppelt so schwer wie ein Fehlalarm. '
+                 '<p class="small">Gez&auml;hlt wird pro Foto. Kosten: Fehlalarm 1; &uuml;bersehen 2, wenn auf dem Foto gar nichts gemeldet wird, sonst nur 0,5 (die Mail geht trotzdem raus). '
                  'Schwellen stellst du oben beim jeweiligen Modell ein; dort siehst du die Wirkung sofort.%s%s</p>' % ("".join(rows), note, few))
         return html_, json.dumps(js, separators=(",", ":"))
 

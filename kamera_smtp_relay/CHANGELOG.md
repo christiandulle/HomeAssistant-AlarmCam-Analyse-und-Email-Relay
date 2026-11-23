@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.9
+
+- Schwellen-Empfehlung: **neue Gewichtung der Fehler**. Fehlalarm zählt 1. Ein übersehenes Objekt zählt **2**, wenn auf dem Foto gar nichts gemeldet wird (das Foto gilt als leer, die Mail geht eventuell nicht raus), aber nur **0,5**, wenn auf dem Foto eine andere Klasse gemeldet wird (z. B. Person erkannt, Auto nicht: die Mail geht trotzdem raus)
+- Weil die Kosten einer Klasse jetzt von den Schwellen der anderen abhängen, sucht die Empfehlung die Schwellen reihum, bis sich nichts mehr verbessert, und setzt jede in die Mitte ihrer besten Strecke
+- Der Schwellen-Vergleich und die Live-Nachrechnung bei den Schwellen-Feldern zeigen zusätzlich die **Kosten**; die Zähler für Fehlalarm und übersehen bleiben ganze Zahlen
+
 ## 1.1.8
 
 - Kontrolle: **Filter** für Modell (Produktiv, Test), Art (Fehlalarm, Übersehen, Richtig) und Klasse (Mensch, Tier, Fahrzeug), jeweils antippen zum Ein- und Ausschalten und beliebig kombinierbar (z. B. „Produktiv, Fehlalarm, Tier“); Art und Klasse beurteilen nur Fotos mit deinem Label
