@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0
+
+- **Videos werden ausgewertet.** Kommt eine Mail mit Video, schneidet das Add-on Standbilder heraus: in den ersten 10 Sekunden alle 2 Sekunden, danach alle 4 Sekunden, bis höchstens 30 Sekunden. Die Videodekodierung übernimmt die Bibliothek PyAV, ein eigenes ffmpeg ist nicht nötig
+- Alle Standbilder laufen durch die normale Erkennung (Schwellen des Modells). Ein in der Mail mitgeschicktes Foto zählt als zusätzlicher Kandidat
+- **Bestes Bild:** zuerst die meisten Klassen über der Schwelle, dann die höchste Sicherheit. Liegen mehrere Bilder nah beieinander (bis 5 Prozentpunkte), gewinnt das schärfste (Schärfe im Bereich des erkannten Motivs), bei Gleichstand das mittlere. Findet kein Bild etwas, zählt der höchste Wert unter der Schwelle
+- **Weitergeleitet wird nur das beste Bild** als Foto, das Video hängt nicht an. Findet kein Bild etwas, verhält sich die Mail wie ein leeres Foto (bei Filter „an“ wird sie nicht weitergeleitet). Das Video bleibt in jedem Fall abgelegt (neben dem Foto im Kameraordner)
+- Board: Kacheln mit Video tragen den Marker „Video“. In der Vergrößerung öffnet der Knopf „Video“ einen Player direkt im Bild (mit Vor- und Zurückspulen), ein zweiter Klick geht zurück zum Standbild. Löschen im Board entfernt Foto und Video
+- Videos kommen in der Warteschlange nach den Fotos dran und laufen wie die Bilderkennung mit niedriger Priorität. Lässt sich ein Video nicht lesen, wird die Mail unverändert (mit Video) weitergeleitet, es geht nichts verloren
+- Der belegte Speicher zählt Standbild und Video. Bitte das Speicherlimit im Blick behalten: Videos sind deutlich größer als Fotos
+
 ## 1.2.0
 
 - Kontrolle: Zwei Weiterleitungs-Kennzahlen je Modell: **„nicht weitergeleitet, obwohl etwas da ist“** (Label mit Inhalt, Modell meldet nichts) und **„leer weitergeleitet“** (Label „Leer“, Modell meldet etwas). Weitergeleitet heißt: mindestens eine Klasse wird gemeldet. Die Zahlen stehen in „Gegen deine Labels“, im Schwellen-Vergleich (aktuelle und beste Schwellen) und in der Live-Nachrechnung bei den Schwellen-Feldern

@@ -22,6 +22,7 @@ from email.parser import BytesParser
 import detect as _detect
 import tune as _tune
 from store import DET_FILTERS, FILTERS, PREVIEW_TYPE, CameraError, placeholder_name
+from video import VIDEO_TYPE
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -62,10 +63,10 @@ TABS = (
 )
 
 LIGHTBOX = """
-<div id="lb"><button class="x" id="lbx" title="Schlie&szlig;en (Esc)">&times;</button><button class="fvb" id="lbfav" title="Favorit (F)">&#9734;</button><button class="snd" id="lbsend" title="Foto erneut an das Ziel senden">Neu senden</button>
+<div id="lb"><button class="x" id="lbx" title="Schlie&szlig;en (Esc)">&times;</button><button class="fvb" id="lbfav" title="Favorit (F)">&#9734;</button><button class="snd" id="lbsend" title="Foto erneut an das Ziel senden">Neu senden</button><button class="vid" id="lbvid" style="display:none">&#9654; Video</button>
 <div class="cap" id="lbc"></div>
 <div class="stage"><button class="nav" id="lbp" title="Zur&uuml;ck (&larr;)">&#8249;</button>
-<img id="lbi" alt=""><button class="nav" id="lbn" title="Weiter (&rarr;)">&#8250;</button></div>
+<img id="lbi" alt=""><video id="lbvv" controls playsinline preload="metadata" style="display:none;max-width:calc(100vw - 150px);max-height:100%;border-radius:6px;background:#000"></video><button class="nav" id="lbn" title="Weiter (&rarr;)">&#8250;</button></div>
 <div class="ctl"><button id="lbplay" title="Abspielen / Pause (Leertaste)">&#9654;</button><button id="lbdir" title="Abspielrichtung umschalten"></button>
 <button id="lbbx" title="Rahmen um erkannte Objekte ein-/ausblenden">Rahmen</button><span class="lbl">Tempo</span><input type="range" id="lbs" min="100" max="3000" step="100" value="800"
 title="Anzeigedauer pro Foto"><span class="lbl" id="lbv">0,8 s</span></div>
@@ -130,7 +131,12 @@ cap.appendChild(d1);if(tm)cap.appendChild(d2);}
 function placeDet(){placeBoxes();var t=dtx.getAttribute('data-t')||'';if(!t&&dtx.getAttribute('data-low'))t='\\u200b';if(!t||Z.s!==1){dtx.style.display='none';return;}
 var r=im.getBoundingClientRect();dtx.textContent=t;var lw=dtx.getAttribute('data-low')||'';if(lw){var sp=document.createElement('span');sp.className='lo';sp.textContent='\\n'+lw;dtx.appendChild(sp);}dtx.style.left=(r.left+8)+'px';dtx.style.top=(r.top+8)+'px';dtx.style.display='block';}
 window.addEventListener('resize',placeDet);
-var snb=document.getElementById('lbsend');
+var snb=document.getElementById('lbsend'),vdb=document.getElementById('lbvid');
+var vv=document.getElementById('lbvv');
+function stopVid(){try{vv.pause();}catch(e){}vv.removeAttribute('src');try{vv.load();}catch(e){}vv.style.display='none';im.style.display='';}
+function vidBtn(a){stopVid();var v=a.getAttribute('data-vid')||'';if(!v){vdb.style.display='none';return;}vdb.title=a.getAttribute('data-vinfo')||'';vdb.innerHTML='&#9654; Video'+(v!=='1'?' ('+v+')':'');vdb.style.display='';}
+function playVid(){var a=list[pos];if(!a)return;if(vv.style.display!=='none'){stopVid();vidBtn(a);placeDet();return;}stop();
+vv.src=a.href.replace(/\\/(preview|part\\/\\d+)$/,'/video');im.style.display='none';bxl.style.display='none';dtx.style.display='none';vv.style.display='';vdb.innerHTML='&#9632; Standbild';try{vv.play();}catch(e){}}
 function sndBtn(a){var k=a.getAttribute('data-sk')||'',w=a.getAttribute('data-st')||'';
 if(!a.getAttribute('data-id')){snb.style.display='none';return;}snb.style.display='';
 if(k==='queued'||k==='sending'||k==='held'){snb.disabled=true;snb.textContent=w||'wartet';}
@@ -155,7 +161,7 @@ function setFav(a,v){a.setAttribute('data-fav',v?'1':'0');var old=a.querySelecto
 function toggleFav(){var a=list[pos];if(!a||!a.getAttribute('data-id'))return;var want=a.getAttribute('data-fav')==='1'?0:1;
 setFav(a,want);favBtn(a);var x=new XMLHttpRequest();x.open('POST','api/fav/'+a.getAttribute('data-id'));x.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
 x.onload=function(){if(x.status!==200){setFav(a,!want);favBtn(list[pos]);}};x.onerror=function(){setFav(a,!want);favBtn(list[pos]);};x.send('v='+want);}
-function show(i){pos=i;resetZoom();var a=list[i];var dt=a.getAttribute('data-det')||'',tt=a.getAttribute('data-test')||'';sndBtn(a);dtx.setAttribute('data-t',tt?'Bisher: '+(dt||'-').replace(/\\n/g,', ')+'\\nTest: '+tt.replace(/\\n/g,', '):dt);favBtn(a);dtx.style.display='none';bxl.setAttribute('data-b',a.getAttribute('data-box')||'');bxl.setAttribute('data-tb',tt?(a.getAttribute('data-tbox')||''):'');bxl.setAttribute('data-lb',a.getAttribute('data-lbox')||'');bxl.setAttribute('data-tlb',a.getAttribute('data-tlbox')||'');dtx.setAttribute('data-low',a.getAttribute('data-low')||'');bxl.style.display='none';im.onload=im.onerror=function(){placeDet();schedule();};im.src=a.href;
+function show(i){pos=i;resetZoom();var a=list[i];var dt=a.getAttribute('data-det')||'',tt=a.getAttribute('data-test')||'';sndBtn(a);vidBtn(a);dtx.setAttribute('data-t',tt?'Bisher: '+(dt||'-').replace(/\\n/g,', ')+'\\nTest: '+tt.replace(/\\n/g,', '):dt);favBtn(a);dtx.style.display='none';bxl.setAttribute('data-b',a.getAttribute('data-box')||'');bxl.setAttribute('data-tb',tt?(a.getAttribute('data-tbox')||''):'');bxl.setAttribute('data-lb',a.getAttribute('data-lbox')||'');bxl.setAttribute('data-tlb',a.getAttribute('data-tlbox')||'');dtx.setAttribute('data-low',a.getAttribute('data-low')||'');bxl.style.display='none';im.onload=im.onerror=function(){placeDet();schedule();};im.src=a.href;
 setCap(i,a.getAttribute('data-cap')||'');
 prev.disabled=i<=0;next.disabled=i>=list.length-1;
 if(list[i+1]){(new Image()).src=list[i+1].href;}}
@@ -163,7 +169,7 @@ function anchors(){return [].slice.call(document.querySelectorAll('a.zoom'));}
 function open(a){stop();try{fwd=localStorage.getItem('kameraDir')==='fwd';}catch(e){fwd=false;}dirBtn();list=anchors();show(list.indexOf(a));lb.style.display='flex';}
 function startShow(){fwd=true;dirBtn();pb.textContent='\u2026';lb.style.display='flex';
 loadAll(function(){list=anchors();if(!list.length){close();return;}playing=true;pb.innerHTML='&#10074;&#10074;';show(list.length-1);});}
-function close(){stop();dtx.style.display='none';bxl.style.display='none';lb.style.display='none';im.onload=im.onerror=null;im.src='';if(window.onLbClose)window.onLbClose();}
+function close(){stop();stopVid();dtx.style.display='none';bxl.style.display='none';lb.style.display='none';im.onload=im.onerror=null;im.src='';if(window.onLbClose)window.onLbClose();}
 function step(d){stop();if(lb.style.display==='flex'&&pos+d>=0&&pos+d<list.length)show(pos+d);}
 document.addEventListener('click',function(ev){
 var a=ev.target.closest&&ev.target.closest('a.zoom');
@@ -175,6 +181,7 @@ else if(ev.target===pb){if(playing)stop();else play();pb.blur();}
 else if(ev.target===dirb){fwd=!fwd;try{localStorage.setItem('kameraDir',fwd?'fwd':'back');}catch(e){}dirBtn();setCap(pos,list[pos].getAttribute('data-cap')||'');schedule();dirb.blur();}
 else if(ev.target.id==='lbmore'){loadMore();}
 else if(ev.target.closest&&ev.target.closest('#lbrow button')){toggleLbl(ev.target.getAttribute('data-n'));ev.target.blur();}
+else if(ev.target===vdb){playVid();vdb.blur();}
 else if(ev.target===fvb){toggleFav();fvb.blur();}else if(ev.target===snb){sendNow();snb.blur();}
 else if(ev.target===bxb){showBox=!showBox;try{localStorage.setItem('kameraBoxes',showBox?'1':'0');}catch(e){}boxBtn();placeBoxes();bxb.blur();}});
 sel.addEventListener('input',function(){label();try{localStorage.setItem('kameraSpeed',sel.value);}catch(e){}schedule();});
@@ -284,6 +291,7 @@ img.pv{cursor:zoom-in}
 .gc{background:var(--card);border-radius:10px;overflow:hidden}
 .gc a.zoom{display:block;position:relative}
 .dt{white-space:pre-line;position:absolute;left:6px;top:6px;background:rgba(0,0,0,.65);color:#fff;font-size:12px;font-weight:600;padding:2px 8px;border-radius:4px;pointer-events:none}
+.vm{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;line-height:1;padding:3px 6px;border-radius:9px;pointer-events:none}
 .fv{position:absolute;right:6px;top:2px;color:#ffd24a;font-size:24px;line-height:1.2;text-shadow:0 0 3px #000;pointer-events:none}
 .favf{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;margin-right:8px}.favf input{width:auto;margin:0}
 .gc img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000;cursor:zoom-in}
@@ -309,6 +317,7 @@ font-size:44px;padding:10px 18px;cursor:pointer;opacity:.85;margin:0}
 #lb #lbp{left:10px}#lb #lbn{right:10px}
 #lb .nav:disabled{opacity:.15;cursor:default}
 #lb .fvb{position:absolute;top:8px;left:16px;background:none;border:none;color:#fff;font-size:34px;cursor:pointer;margin:0;padding:0 6px;line-height:1.2;z-index:3}
+#lb .vid{position:absolute;top:14px;right:70px;z-index:3;font-size:13px;padding:5px 11px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;text-decoration:none;white-space:nowrap}
 #lb .snd{position:absolute;top:14px;left:70px;z-index:3;margin:0;font-size:13px;padding:5px 11px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;max-width:calc(100vw - 160px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #lb .snd:disabled{opacity:.6}
 #lb #lbrow button.on{background:#6e9a35}
@@ -642,13 +651,35 @@ def low_popup(row, sim=False):
     return ""
 
 
+def has_video(row):
+    """Mail mit ausgewertetem Video (das Foto ist ein Standbild daraus und das Video liegt daneben)."""
+    keys = row.keys()
+    return bool("n_videos" in keys and row["n_videos"] and "vsec" in keys and row["vsec"] is not None and row["vsec"] >= 0)
+
+
+def video_info(row):
+    """(Kurztext fuer den Knopf, Erklaerung) oder ("", "") ohne Video."""
+    if not has_video(row):
+        return "", ""
+    size = (row["pbytes"] or 0) / 1048576.0
+    mb = ("%.1f MB" % size).replace(".", ",") if size >= 0.1 else ""
+    n = row["vframes"] or 0
+    pick = "das mitgeschickte Foto" if (row["vsharp"] or 0) < 0 else "Bild bei %d s" % round(row["vsec"])
+    return mb or "1", "Video dahinter: bestes Bild ist %s, %d Bilder ausgewertet" % (pick, n)
+
+
+def video_mark(row):
+    return '<span class="vm">&#9654; Video</span>' if has_video(row) else ""
+
+
 def zoom_attrs(row, caption, sim=False):
     """data-Attribute eines Foto-Links fuers grosse Bild (Beschriftung, Erkennung, Stern, Testmodell)."""
     keys = row.keys()
     st = STATUS.get(row["status"], (row["status"], ""))[0] if "status" in keys else ""
-    return ('data-cap="%s" data-det="%s" data-box="%s" data-id="%d" data-fav="%d" data-test="%s" data-tbox="%s"'
+    vid, vinfo = video_info(row)
+    return ('data-vid="%s" data-vinfo="%s" data-cap="%s" data-det="%s" data-box="%s" data-id="%d" data-fav="%d" data-test="%s" data-tbox="%s"'
             ' data-st="%s" data-sk="%s" data-lbl="%s" data-low="%s" data-lbox="%s" data-tlbox="%s"'
-            % (e(caption), e(det_text(row, sim)), e(det_boxes(row, sim)), row["id"],
+            % (e(vid), e(vinfo), e(caption), e(det_text(row, sim)), e(det_boxes(row, sim)), row["id"],
                1 if "fav" in keys and row["fav"] else 0, e(test_text(row, sim)), e(test_boxes(row, sim)),
                e(st), e(row["status"] if "status" in keys else ""), e(row["lbl"] if "lbl" in keys and row["lbl"] else ""),
                e(low_popup(row, sim)), e(low_boxes(row, "det", sim)), e(low_boxes(row, "test", sim))))
@@ -817,6 +848,9 @@ class Board:
             match = re.fullmatch(r"/mail/(\d+)/preview", path)
             if match:
                 return self._preview(req, int(match.group(1)))
+            match = re.fullmatch(r"/mail/(\d+)/video", path)
+            if match:
+                return self._video(req, int(match.group(1)))
             match = re.fullmatch(r"/mail/(\d+)/part/(\d+)", path)
             if match:
                 return self._part(req, int(match.group(1)), int(match.group(2)))
@@ -1081,6 +1115,33 @@ class Board:
             {"Cache-Control": "private, max-age=3600",
              "Content-Security-Policy": "default-src 'none'; sandbox"},
         )
+
+    def _video(self, req, mail_id):
+        """Das zu einem Standbild gehoerende Video (mit Bereichsanfragen, damit Vor- und Zurueckspulen geht)."""
+        path = self.store.video_path(mail_id)
+        if path is None:
+            return self._send(req, 404, "Video nicht vorhanden", "text/plain; charset=utf-8")
+        size = os.path.getsize(path)
+        ctype = VIDEO_TYPE.get(path.rsplit(".", 1)[-1], "application/octet-stream")
+        headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=300",
+                   "Content-Security-Policy": "default-src 'none'; sandbox"}
+        start, end, code = 0, size - 1, 200
+        rng = re.fullmatch(r"bytes=(\d*)-(\d*)", req.headers.get("Range", "") or "")
+        if rng and size and (rng.group(1) or rng.group(2)):
+            if rng.group(1):
+                start = int(rng.group(1))
+                end = min(int(rng.group(2)) if rng.group(2) else size - 1, size - 1)
+            else:
+                start = max(0, size - int(rng.group(2)))
+            if 0 <= start <= end < size:
+                code = 206
+                headers["Content-Range"] = "bytes %d-%d/%d" % (start, end, size)
+            else:
+                start, end = 0, size - 1
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(end - start + 1)
+        self._send(req, code, data, ctype, headers)
 
     def _part(self, req, mail_id, index):
         data = self.store.read(mail_id)
@@ -1640,7 +1701,7 @@ class Board:
                 '<div class="t">%s%s</div><div class="d">%s</div></div>'
                 % (src, zoom_attrs(r, "%s  -  %s" % (title, time.strftime("%d.%m.%y %H:%M:%S", time.localtime(r["received"])))), src,
                    '<span class="dt">%s</span>' % e(det_text(r)) if det_text(r) else "",
-                   '<span class="fv">&#9733;</span>' if r["fav"] else "",
+                   ('<span class="fv">&#9733;</span>' if r["fav"] else "") + video_mark(r),
                    e(title), det_badge(r) + status_badge(r), e(when))
             )
         last_id = rows[-1]["id"] if rows else 0
@@ -2426,9 +2487,9 @@ simAll();})();</script>"""
             btns = "".join('<button type="button" data-n="%s"%s>%s</button>' % (n, ' class="on"' if n in have else "", lab)
                            for n, lab in (("tier", "Tier"), ("mensch", "Mensch"), ("fahrzeug", "Fahrzeug"), ("leer", "Leer")))
             tiles.append(
-                '<div class="gc%s"><a href="%s" class="zoom" %s><img loading="lazy" src="%s" alt=""><span class="fv">&#9733;</span></a>'
+                '<div class="gc%s"><a href="%s" class="zoom" %s><img loading="lazy" src="%s" alt=""><span class="fv">&#9733;</span>%s</a>'
                 '<div class="t">%s</div>%s%s<div class="lrow" data-id="%d" data-lbl="%s">%s</div></div>'
-                % (frame, src, zoom_attrs(r, cap, True), src, e(title), line1, line2, mail_id, e(cur), btns))
+                % (frame, src, zoom_attrs(r, cap, True), src, video_mark(r), e(title), line1, line2, mail_id, e(cur), btns))
         if st["test_path"]:
             summary = "%d Favoriten, %d mit Testergebnis, %d gleich, %d abweichend" % (len(favs), n_test, n_same, n_test - n_same)
         else:

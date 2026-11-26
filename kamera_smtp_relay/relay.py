@@ -13,7 +13,7 @@ Es gibt genau einen Port. Ob die Kamera mit SSL/TLS, mit STARTTLS oder
 unverschluesselt sendet, wird pro Verbindung automatisch erkannt.
 """
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 import asyncio
 import hmac
@@ -488,8 +488,10 @@ class RelayHandler:
         try:
             hold = bool(self.detector and self.detector.ok and self.cfg["detect_filter"] == "an")
             forward = bool(self.cfg["forward_enabled"])
+            hold_video = bool(self.detector and self.detector.ok)
             result = await loop.run_in_executor(
-                None, lambda: self.store.accept(peer, envelope.mail_from, rcpts, content, window, hold=hold, forward=forward)
+                None, lambda: self.store.accept(peer, envelope.mail_from, rcpts, content, window, hold=hold,
+                                                forward=forward, hold_video=hold_video)
             )
         except Exception as exc:
             log.error("Mail von %s konnte nicht gespeichert werden: %r", peer, exc)
@@ -497,8 +499,8 @@ class RelayHandler:
 
         mail_id = result["id"]
         info = result["info"]
-        if self.detector and info["n_images"]:
-            self.detector.submit(mail_id)
+        if self.detector and (info["n_images"] or info["n_videos"]):
+            self.detector.submit(mail_id, video=bool(info["n_videos"]))
         session.relay_mails = getattr(session, "relay_mails", 0) + 1
         attach = info["n_images"] + info["n_videos"]
         note_session(

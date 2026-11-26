@@ -12,6 +12,8 @@ import queue
 import threading
 import time
 
+import video as video_mod
+
 log = logging.getLogger("relay")
 
 BUILTIN_PATH = os.environ.get("RELAY_DETECT_MODEL", "/app/models/megadetector_v6.onnx")
@@ -364,8 +366,9 @@ class DetectWorker(threading.Thread):
         self.recheck = {"active": False, "total": 0, "done": 0, "cancel": False, "started": 0.0, "finished": 0.0}
         self.ok = True
 
-    def submit(self, mail_id):
-        self.queue.put((0, next(self.seq), mail_id, "det"))
+    def submit(self, mail_id, video=False):
+        # Videos kommen nach den Fotos dran, damit normale Fotos nie auf ein Video warten
+        self.queue.put((0.5 if video else 0, next(self.seq), mail_id, "det"))
 
     def submit_test(self, mail_id):
         """Neuer Favorit: mit dem Testmodell pruefen (falls ein Testmodell im Ordner test liegt)."""
@@ -435,9 +438,8 @@ class DetectWorker(threading.Thread):
 
     def _release(self, mail_id, label):
         """Filter "an": Mail ohne Erkennung bleibt gespeichert, alles andere wird weitergeleitet."""
-        if self.filter_mode != "an":
-            return
-        forward = label != "leer"   # "fehler" und alles Unklare wird weitergeleitet
+        # Mails mit Video warten immer (auch bei Filter aus), release_held ignoriert alle anderen
+        forward = label != "leer" if self.filter_mode == "an" else True   # "fehler" und alles Unklare wird weitergeleitet
         if not self.store.release_held(mail_id, forward):
             return   # Mail wartete nicht (z. B. aus dem Bestand)
         if forward:
@@ -569,7 +571,48 @@ class DetectWorker(threading.Thread):
         self._remember(TEST_TAG, self.test_detector)
         return self.last_ms
 
+    def _process_video(self, mail_id):
+        """Mail mit Video: Standbilder auswerten, das beste als Foto der Mail verwenden. False = kein Video zu tun."""
+        job = self.store.video_job(mail_id)
+        if not job:
+            return False
+        data, vext = job["video"]
+        cands, ms, nerr = [], 0, 0
+        frames = [(-1, img, job["photo_ext"]) for img in job["images"][:1]]   # mitgeschicktes Foto zaehlt als Kandidat
+        frames += [(t, jpg, "jpg") for t, jpg in video_mod.extract_frames(data)]
+        for t, img, ext in frames:
+            try:
+                res = self.detector.analyse(img)
+            except Exception as exc:
+                log.debug("Standbild %s der Mail %s nicht auswertbar: %r", t, mail_id, exc)
+                nerr += 1
+                continue
+            ms += res.get("ms", 0)
+            cands.append({"t": t, "data": img, "ext": ext, "res": res})
+        if not cands:   # Video nicht lesbar: die Mail geht unveraendert (mit Video) weiter, nichts geht verloren
+            log.warning("[#%d] Video nicht auswertbar - Mail wird unveraendert behandelt", mail_id)
+            self.store.set_detection(mail_id, "fehler", 0.0, 0, MODEL_TAG)
+            self._release(mail_id, "fehler")
+            return True
+        best, sharp = video_mod.pick_best(cands)
+        res = best["res"]
+        label, confs, top = encode(res["confs"])
+        lowc, lowb = encode_low(res.get("low", {}))
+        self.last_ms = round(ms / len(cands))
+        if not self.store.store_video_result(mail_id, best["data"], best["ext"], data, vext,
+                                             best["t"], sharp, len(cands)):
+            return True
+        self.store.set_detection(mail_id, label, top, len(cands), MODEL_TAG, confs, encode_boxes(res.get("boxes", [])),
+                                 ms=self.last_ms, low=lowc, lowb=lowb)
+        self._remember(self.loaded_tag or MODEL_TAG, self.detector)
+        log.info("[#%d] Video: %d Standbild(er) ausgewertet, bestes bei %s -> %s", mail_id, len(cands),
+                 "Foto der Mail" if best["t"] < 0 else "%d s" % best["t"], label)
+        self._release(mail_id, label)
+        return True
+
     def process(self, mail_id):
+        if self._process_video(mail_id):
+            return
         images = self.store.mail_images(mail_id, self.MAX_IMAGES)
         if not images:
             if self.store.detection_label(mail_id):   # Fotos nicht mehr da: altes Ergebnis behalten

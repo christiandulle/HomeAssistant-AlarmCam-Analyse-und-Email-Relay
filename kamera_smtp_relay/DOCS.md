@@ -300,3 +300,11 @@ Unterstützt werden die YOLO-Varianten von MegaDetector V6 (v9/v10) im ONNX-Form
 **Hinweis:** Das Add-on-Image basiert auf Debian statt Alpine (onnxruntime gibt es nur für Debian) und ist dadurch größer.
 
 **Lizenzhinweis:** Das Modell (MegaDetector V6, Microsoft, Lizenz AGPL-3.0) liegt als Datei im Add-on. Für den privaten Einsatz ist das unproblematisch; bei Weitergabe des Add-ons gilt die Lizenz des Modells.
+
+### Videos
+
+Schickt eine Kamera ein Video, schneidet das Add-on daraus Standbilder: in den ersten 10 Sekunden alle 2 Sekunden, danach alle 4 Sekunden, bis zu 30 Sekunden. Jedes Standbild läuft durch die Erkennung. Ein mitgeschicktes Foto zählt als zusätzliches Bild.
+
+Das beste Bild wird weitergeleitet (als normales Foto, ohne Video) und im Board angezeigt. Es hat die meisten erkannten Klassen, bei Gleichstand die höchste Sicherheit, und bei fast gleicher Sicherheit das schärfste Bild. Wird auf keinem Bild etwas erkannt, gilt die Mail wie ein leeres Foto (bei Filter „an“ wird sie nicht weitergeleitet).
+
+Das Video bleibt immer abgelegt, neben dem Foto im Kameraordner. Im Board trägt die Kachel den Marker „Video“, in der Vergrößerung öffnet der Knopf „Video“ einen Player mit Vor- und Zurückspulen für den genauen Blick. Löschen im Board entfernt Foto und Video. Videos brauchen deutlich mehr Speicher als Fotos, das Speicherlimit zählt sie mit.

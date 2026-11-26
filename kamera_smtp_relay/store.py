@@ -30,6 +30,8 @@ import time
 from email.message import EmailMessage
 from email.parser import BytesHeaderParser, BytesParser
 
+from video import VIDEO_TYPE, video_part
+
 log = logging.getLogger("relay")
 
 SCHEMA = """
@@ -275,7 +277,7 @@ def preview_image(content, index):
     return None
 
 
-def build_mail(row, data, ext):
+def build_mail(row, data, ext, text="Foto der Kamera (erneut gesendet)."):
     """Baut aus Foto und Metadaten eine neue Mail (zum erneuten Senden). RevierSpion ordnet
     nur nach der Empfaengeradresse zu, Absender und Text sind unwichtig."""
     msg = EmailMessage()
@@ -288,7 +290,7 @@ def build_mail(row, data, ext):
     msg["Subject"] = row["subject"] or "Kamera-Alarm"
     msg["Date"] = email.utils.formatdate(row["mail_date"] or row["received"])
     msg["Message-ID"] = email.utils.make_msgid(domain="kamera.local")
-    msg.set_content("Foto der Kamera (erneut gesendet).")
+    msg.set_content(text)
     maintype, _, subtype = PREVIEW_TYPE.get(ext, "image/jpeg").partition("/")
     msg.add_attachment(data, maintype=maintype, subtype=subtype, filename="foto.%s" % ext)
     return msg.as_bytes(policy=email.policy.SMTP)   # CRLF-Zeilenenden, sonst lehnt das Ziel die Mail ab
@@ -343,7 +345,8 @@ class Store:
                              ("pbytes", "INTEGER DEFAULT 0"), ("ppath", "TEXT DEFAULT ''"),
                              ("det_ms", "INTEGER DEFAULT 0"), ("test_ms", "INTEGER DEFAULT 0"),
                              ("lbl", "TEXT DEFAULT ''"), ("det_low", "TEXT DEFAULT ''"), ("det_lowb", "TEXT DEFAULT ''"),
-                             ("test_low", "TEXT DEFAULT ''"), ("test_lowb", "TEXT DEFAULT ''")):
+                             ("test_low", "TEXT DEFAULT ''"), ("test_lowb", "TEXT DEFAULT ''"),
+                             ("vsec", "REAL DEFAULT -1"), ("vsharp", "REAL DEFAULT 0"), ("vframes", "INTEGER DEFAULT 0")):
                 if col not in mail_cols:  # Bilderkennung (ab 1.11.0)
                     self.db.execute("ALTER TABLE mails ADD COLUMN %s %s" % (col, ddl))
             columns = [r[1] for r in self.db.execute("PRAGMA table_info(cameras)")]
@@ -399,12 +402,17 @@ class Store:
     def _remove_preview(self, mail_id, path=None):
         """Foto loeschen. path: zuvor ermittelter Pfad (die Zeile ist beim Aufruf oft schon geloescht)."""
         if path:
+            for ext in VIDEO_TYPE:   # ein Video liegt mit gleichem Namen neben dem Standbild
+                try:
+                    os.remove(path.rsplit(".", 1)[0] + "." + ext)
+                except OSError:
+                    pass
             try:
                 os.remove(path)
             except OSError:
                 pass
             self._prune_dirs(path)
-        for ext in PREVIEW_TYPE:
+        for ext in list(PREVIEW_TYPE) + list(VIDEO_TYPE):
             try:
                 os.remove(os.path.join(self.previews, "%d.%s" % (int(mail_id), ext)))
             except OSError:
@@ -541,6 +549,66 @@ class Store:
             fh.write(data)
         return rel
 
+    def video_path(self, mail_id):
+        """Pfad des aufbewahrten Videos (liegt neben dem Standbild) oder None."""
+        stems = []
+        photo = self.preview_path(mail_id)
+        if photo:
+            stems.append(photo.rsplit(".", 1)[0])
+        stems.append(os.path.join(self.previews, str(int(mail_id))))
+        for stem in stems:
+            for ext in VIDEO_TYPE:
+                path = stem + "." + ext
+                if os.path.isfile(path):
+                    return path
+        return None
+
+    def video_job(self, mail_id):
+        """Mail mit noch nicht ausgewertetem Video: {"video": (Bytes, Endung), "images": [...], "photo_ext"} oder None."""
+        row = self.get(mail_id)
+        if row is None or not row["n_videos"] or (row["vsec"] is not None and row["vsec"] >= 0):
+            return None
+        try:
+            with open(self.path(mail_id), "rb") as fh:
+                content = fh.read()
+        except OSError:
+            return None
+        found = video_part(content)
+        if not found:
+            return None
+        images = self.mail_images(mail_id, 1)
+        ext = "jpg"
+        if images and images[0][:4] == b"\x89PNG":
+            ext = "png"
+        return {"video": found, "images": images, "photo_ext": ext}
+
+    def store_video_result(self, mail_id, frame, ext, video, vext, sec, sharp, nframes):
+        """Videoauswertung fertig: bestes Standbild als Foto ablegen, das Video daneben, und die Mail aus dem
+        Standbild neu bauen (das Video wird nicht mitgeschickt). Gibt False zurueck, wenn es die Mail nicht mehr gibt."""
+        with self.lock:
+            row = self.db.execute("SELECT * FROM mails WHERE id=?", (mail_id,)).fetchone()
+        if row is None:
+            return False
+        old = self.preview_path(mail_id)
+        if old:
+            self._remove_preview(mail_id, old)
+        rel = self._write_photo(mail_id, row["camera"], row["received"], frame, ext)
+        if video:
+            self._write_photo(mail_id, row["camera"], row["received"], video, vext)
+        content = build_mail(row, frame, ext, text="Standbild aus einem Video der Kamera.")
+        tmp = self.path(mail_id) + ".tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(content)
+        os.replace(tmp, self.path(mail_id))
+        with self.lock:
+            self.db.execute(
+                "UPDATE mails SET ppath=?, pbytes=?, preview=2, preview_type='image', size=?, has_file=1,"
+                " vsec=?, vsharp=?, vframes=?, n_images=MAX(n_images, 1) WHERE id=?",
+                (rel, len(frame) + len(video or b""), len(content), max(float(sec), 0.0),
+                 -1.0 if sec < 0 else float(sharp), int(nframes), mail_id))
+            self.db.commit()
+        return True
+
     def migrate_to_share(self):
         """Interne Fotos (previews/) auf den Share verschieben, wenn die Ablage dort an ist."""
         if not self.use_share:
@@ -603,7 +671,7 @@ class Store:
 
     # -- Annahme --------------------------------------------------------
 
-    def accept(self, peer, mail_from, rcpts, content, window_seconds, now=None, hold=False, forward=True):
+    def accept(self, peer, mail_from, rcpts, content, window_seconds, now=None, hold=False, forward=True, hold_video=False):
         """Speichert eine Mail und entscheidet, ob sie weitergeleitet oder gedrosselt wird."""
         now = time.time() if now is None else now
         info = inspect_mail(content)
@@ -621,8 +689,8 @@ class Store:
                 status, throttled = "stored", True      # Weiterleitung aus: nur speichern
             elif throttled:
                 status = "throttled"
-            elif hold and info["n_images"]:
-                status = "held"
+            elif (hold and info["n_images"]) or (hold_video and info["n_videos"]):
+                status = "held"   # Videos warten immer: aus dem besten Standbild wird die Mail neu gebaut
             else:
                 status = "queued"
             try:
@@ -652,7 +720,7 @@ class Store:
                 new_camera = False
                 if camera:
                     new_camera = self.db.execute("SELECT 1 FROM cameras WHERE address=?", (camera,)).fetchone() is None
-                    photo = 1 if info["n_images"] else 0   # gezaehlt werden nur Mails mit Foto
+                    photo = 1 if info["n_images"] or info["n_videos"] else 0   # gezaehlt werden nur Mails mit Foto oder Video
                     self.db.execute(
                         "INSERT INTO cameras (address, first_seen, last_seen, mails)"
                         " VALUES (?,?,?,?) ON CONFLICT(address) DO UPDATE SET"
