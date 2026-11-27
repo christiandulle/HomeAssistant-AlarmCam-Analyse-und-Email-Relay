@@ -137,8 +137,13 @@ var vv=document.getElementById('lbvv');
 function stopVid(){try{var fe=document.fullscreenElement||document.webkitFullscreenElement;if(fe===vv){var ef=document.exitFullscreen||document.webkitExitFullscreen;if(ef){var er=ef.call(document);if(er&&er.catch)er.catch(function(){});}}}catch(e){}try{vv.pause();}catch(e){}vv.removeAttribute('src');try{vv.load();}catch(e){}vv.style.display='none';im.style.display='';}
 function vidBtn(a){stopVid();var v=a.getAttribute('data-vid')||'';if(!v){vdb.style.display='none';return;}vdb.title=a.getAttribute('data-vinfo')||'';vdb.innerHTML='&#9654; Video'+(v!=='1'?' ('+v+')':'');vdb.style.display='';}
 function playVid(){var a=list[pos];if(!a)return;if(vv.style.display!=='none'){stopVid();vidBtn(a);placeDet();return;}stop();
+var touch=!!(window.matchMedia&&matchMedia('(pointer:coarse)').matches);   // Vollbild automatisch nur auf Handy/Tablet, am Rechner reicht der Player
+if(touch&&!(vv.requestFullscreen||vv.webkitRequestFullscreen)&&vv.webkitEnterFullscreen){vv.removeAttribute('playsinline');vv.removeAttribute('webkit-playsinline');}
 vv.src=a.href.replace(/\\/(preview|part\\/\\d+)$/,'/video');im.style.display='none';bxl.style.display='none';dtx.style.display='none';vv.style.display='';vdb.innerHTML='&#9632; Standbild';try{var pr=vv.play();if(pr&&pr.catch)pr.catch(function(){});}catch(e){}
-try{var rf=vv.requestFullscreen||vv.webkitRequestFullscreen;if(rf){var fr=rf.call(vv);if(fr&&fr.catch)fr.catch(function(){});}else if(vv.webkitEnterFullscreen){vv.webkitEnterFullscreen();}}catch(e){}}
+var rf=vv.requestFullscreen||vv.webkitRequestFullscreen;
+try{if(!touch){}else if(rf){var fr=rf.call(vv);if(fr&&fr.catch)fr.catch(function(){});}else if(vv.webkitEnterFullscreen){fsIos();}}catch(e){}}
+function fsIos(){var go=function(){try{vv.webkitEnterFullscreen();}catch(e){}};
+if(vv.readyState>=1){go();}else{vv.addEventListener('loadedmetadata',function f(){vv.removeEventListener('loadedmetadata',f);go();});}}
 function sndBtn(a){var k=a.getAttribute('data-sk')||'',w=a.getAttribute('data-st')||'';
 if(!a.getAttribute('data-id')){snb.style.display='none';return;}snb.style.display='';
 if(k==='queued'||k==='sending'||k==='held'){snb.disabled=true;snb.textContent=w||'wartet';}

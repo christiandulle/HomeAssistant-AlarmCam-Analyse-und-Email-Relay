@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2
+
+- Video im Vollbild: Auf Handy und Tablet (Touchscreen) startet das Video jetzt automatisch im Vollbild. Auf dem iPhone, auch mit Chrome, öffnet dafür der Vollbild-Player von iOS, nach „Fertig“ ist man wieder in der Vergrößerung. Am Rechner mit Maus startet das Video wie bisher klein in der Vergrößerung, der Vollbild-Knopf des Players bleibt dort verfügbar
+
 ## 1.3.1
 
 - Bilder, Vergrößerung: „▶ Video“ sitzt jetzt direkt unter dem Foto, daneben „Rahmen“. Ein Klick auf „Video“ startet das Video sofort im Vollbild (iPhone: Vollbild-Player von Safari). Wer das Vollbild verlässt, bleibt in der Vergrößerung, ein zweiter Klick geht zurück zum Standbild. Weiterblättern oder Schließen beendet auch das Vollbild
