@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.1
+
+- Bilder, Vergrößerung: „▶ Video“ sitzt jetzt direkt unter dem Foto, daneben „Rahmen“. Ein Klick auf „Video“ startet das Video sofort im Vollbild (iPhone: Vollbild-Player von Safari). Wer das Vollbild verlässt, bleibt in der Vergrößerung, ein zweiter Klick geht zurück zum Standbild. Weiterblättern oder Schließen beendet auch das Vollbild
+- Bilder, Vergrößerung: die Zeitraffer-Knöpfe stehen in einer eigenen Zeile darunter (Play, Richtung, Tempo). Die Richtung heißt „vorw.“ bzw. „rückw.“ statt „alt → neu“ bzw. „neu → alt“
+- Bilder, Vergrößerung: die Label-Leiste (Tier, Mensch, Fahrzeug, Leer) steht oben unter dem Stern in der zweiten Reihe und erscheint nur, wenn der Stern aktiv ist (Tasten 1 bis 4 wie bisher)
+- Bilder-Raster: die Etiketten unter den Fotos (Tier, Leer, Ohne Erkennung usw.) sind kleiner, damit sie am Handy weniger Platz brauchen
+- Leerlauf-Grenze beim Mail-Empfang von 60 auf 180 Sekunden erhöht, damit zähe Uploads (z. B. Videos aus dem WLAN) nicht vom Add-on abgebrochen werden
+
 ## 1.3.0
 
 - **Videos werden ausgewertet.** Kommt eine Mail mit Video, schneidet das Add-on Standbilder heraus: in den ersten 10 Sekunden alle 2 Sekunden, danach alle 4 Sekunden, bis höchstens 30 Sekunden. Die Videodekodierung übernimmt die Bibliothek PyAV, ein eigenes ffmpeg ist nicht nötig

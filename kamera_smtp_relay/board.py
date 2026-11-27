@@ -63,14 +63,15 @@ TABS = (
 )
 
 LIGHTBOX = """
-<div id="lb"><button class="x" id="lbx" title="Schlie&szlig;en (Esc)">&times;</button><button class="fvb" id="lbfav" title="Favorit (F)">&#9734;</button><button class="snd" id="lbsend" title="Foto erneut an das Ziel senden">Neu senden</button><button class="vid" id="lbvid" style="display:none">&#9654; Video</button>
+<div id="lb"><button class="x" id="lbx" title="Schlie&szlig;en (Esc)">&times;</button><button class="fvb" id="lbfav" title="Favorit (F)">&#9734;</button><button class="snd" id="lbsend" title="Foto erneut an das Ziel senden">Neu senden</button>
+<div id="lbrow" style="display:none"><button type="button" data-n="tier" title="Taste 1">Tier</button><button type="button" data-n="mensch" title="Taste 2">Mensch</button><button type="button" data-n="fahrzeug" title="Taste 3">Fahrzeug</button><button type="button" data-n="leer" title="Taste 4">Leer</button></div>
 <div class="cap" id="lbc"></div>
 <div class="stage"><button class="nav" id="lbp" title="Zur&uuml;ck (&larr;)">&#8249;</button>
 <img id="lbi" alt=""><video id="lbvv" controls playsinline preload="metadata" style="display:none;max-width:calc(100vw - 150px);max-height:100%;border-radius:6px;background:#000"></video><button class="nav" id="lbn" title="Weiter (&rarr;)">&#8250;</button></div>
-<div class="ctl"><button id="lbplay" title="Abspielen / Pause (Leertaste)">&#9654;</button><button id="lbdir" title="Abspielrichtung umschalten"></button>
-<button id="lbbx" title="Rahmen um erkannte Objekte ein-/ausblenden">Rahmen</button><span class="lbl">Tempo</span><input type="range" id="lbs" min="100" max="3000" step="100" value="800"
+<div class="ctl"><button id="lbvid" title="Video zu diesem Bild abspielen (Vollbild)" style="display:none">&#9654; Video</button><button id="lbbx" title="Rahmen um erkannte Objekte ein-/ausblenden">Rahmen</button></div>
+<div class="ctl"><button id="lbplay" title="Abspielen / Pause (Leertaste)">&#9654;</button><button id="lbdir" title="Abspielrichtung umschalten"></button><span class="lbl">Tempo</span><input type="range" id="lbs" min="100" max="3000" step="100" value="800"
 title="Anzeigedauer pro Foto"><span class="lbl" id="lbv">0,8 s</span></div>
-<div class="ctl" id="lbrow" style="display:none"><span class="lbl">Label</span><button type="button" data-n="tier" title="Taste 1">Tier</button><button type="button" data-n="mensch" title="Taste 2">Mensch</button><button type="button" data-n="fahrzeug" title="Taste 3">Fahrzeug</button><button type="button" data-n="leer" title="Taste 4">Leer</button></div>
+
 <div id="lbd"></div><div id="lbb"></div></div>
 <script>
 (function(){
@@ -79,7 +80,7 @@ var prev=document.getElementById('lbp'),next=document.getElementById('lbn'),pb=d
 var sel=document.getElementById('lbs'),list=[],pos=0,playing=false,timer=null,loading=false;
 var dirb=document.getElementById('lbdir'),fwd=false;
 try{fwd=localStorage.getItem('kameraDir')==='fwd';}catch(e){}
-function dirBtn(){dirb.textContent=fwd?'alt \u2192 neu':'neu \u2192 alt';dirb.title=fwd?'Spielt zeitlich vorwaerts (vom aeltesten zum neuesten Foto). Klick: rueckwaerts':'Spielt zeitlich rueckwaerts (vom neuesten zum aeltesten Foto). Klick: vorwaerts';}dirBtn();
+function dirBtn(){dirb.textContent=fwd?'vorw.':'r\u00fcckw.';dirb.title=fwd?'Spielt zeitlich vorwaerts (vom aeltesten zum neuesten Foto). Klick: rueckwaerts':'Spielt zeitlich rueckwaerts (vom neuesten zum aeltesten Foto). Klick: vorwaerts';}dirBtn();
 function moreB(){var m=document.getElementById('more');return m?m.getAttribute('data-b'):'';}
 function cntLabel(){var c=document.getElementById('lbshow'),n=document.querySelectorAll('a.zoom').length;if(c)c.innerHTML='&#9654; '+n+(moreB()?'+':'')+' Foto'+(n===1&&!moreB()?'':'s');}
 function loadMore(cb){var b=moreB();if(!b||loading){if(cb)cb();return;}loading=true;
@@ -133,10 +134,11 @@ var r=im.getBoundingClientRect();dtx.textContent=t;var lw=dtx.getAttribute('data
 window.addEventListener('resize',placeDet);
 var snb=document.getElementById('lbsend'),vdb=document.getElementById('lbvid');
 var vv=document.getElementById('lbvv');
-function stopVid(){try{vv.pause();}catch(e){}vv.removeAttribute('src');try{vv.load();}catch(e){}vv.style.display='none';im.style.display='';}
+function stopVid(){try{var fe=document.fullscreenElement||document.webkitFullscreenElement;if(fe===vv){var ef=document.exitFullscreen||document.webkitExitFullscreen;if(ef){var er=ef.call(document);if(er&&er.catch)er.catch(function(){});}}}catch(e){}try{vv.pause();}catch(e){}vv.removeAttribute('src');try{vv.load();}catch(e){}vv.style.display='none';im.style.display='';}
 function vidBtn(a){stopVid();var v=a.getAttribute('data-vid')||'';if(!v){vdb.style.display='none';return;}vdb.title=a.getAttribute('data-vinfo')||'';vdb.innerHTML='&#9654; Video'+(v!=='1'?' ('+v+')':'');vdb.style.display='';}
 function playVid(){var a=list[pos];if(!a)return;if(vv.style.display!=='none'){stopVid();vidBtn(a);placeDet();return;}stop();
-vv.src=a.href.replace(/\\/(preview|part\\/\\d+)$/,'/video');im.style.display='none';bxl.style.display='none';dtx.style.display='none';vv.style.display='';vdb.innerHTML='&#9632; Standbild';try{vv.play();}catch(e){}}
+vv.src=a.href.replace(/\\/(preview|part\\/\\d+)$/,'/video');im.style.display='none';bxl.style.display='none';dtx.style.display='none';vv.style.display='';vdb.innerHTML='&#9632; Standbild';try{var pr=vv.play();if(pr&&pr.catch)pr.catch(function(){});}catch(e){}
+try{var rf=vv.requestFullscreen||vv.webkitRequestFullscreen;if(rf){var fr=rf.call(vv);if(fr&&fr.catch)fr.catch(function(){});}else if(vv.webkitEnterFullscreen){vv.webkitEnterFullscreen();}}catch(e){}}
 function sndBtn(a){var k=a.getAttribute('data-sk')||'',w=a.getAttribute('data-st')||'';
 if(!a.getAttribute('data-id')){snb.style.display='none';return;}snb.style.display='';
 if(k==='queued'||k==='sending'||k==='held'){snb.disabled=true;snb.textContent=w||'wartet';}
@@ -147,7 +149,7 @@ x.onload=function(){if(x.status===200){a.setAttribute('data-sk','queued');a.setA
 if(x.status!==200){snb.textContent='nicht m\u00f6glich';}};x.onerror=function(){sndBtn(a);};x.send('');}
 var lrow=document.getElementById('lbrow');
 function lblSet(a){return ((a&&a.getAttribute('data-lbl'))||'').split(',').filter(Boolean);}
-function lblBtns(a){var on=a&&a.getAttribute('data-fav')==='1'&&a.getAttribute('data-id');lrow.style.display=on?'':'none';if(!on)return;var s=lblSet(a);
+function lblBtns(a){var on=a&&a.getAttribute('data-fav')==='1'&&a.getAttribute('data-id');lrow.style.display=on?'flex':'none';lb.classList.toggle('hasl',!!on);if(!on)return;var s=lblSet(a);
 [].forEach.call(lrow.querySelectorAll('button'),function(b){b.className=s.indexOf(b.getAttribute('data-n'))>=0?'on':'';});}
 function toggleLbl(n){var a=list[pos];if(!a||a.getAttribute('data-fav')!=='1'||!a.getAttribute('data-id'))return;
 var s=lblSet(a),i=s.indexOf(n),old=a.getAttribute('data-lbl')||'';
@@ -203,7 +205,7 @@ cx=r.left+r.width/2-Z.x,cy=r.top+r.height/2-Z.y,u=(fx-cx-Z.x)/Z.s,v=(fy-cy-Z.y)/
 Z.s=s2;Z.x=fx-cx-u*s2;Z.y=fy-cy-v*s2;clampZ();apply();}
 function dist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}
 function mid(t){return {x:(t[0].clientX+t[1].clientX)/2,y:(t[0].clientY+t[1].clientY)/2};}
-function ctl(ev){return ev.target.closest&&ev.target.closest('.ctl,.nav,.x');}
+function ctl(ev){return ev.target.closest&&ev.target.closest('.ctl,.nav,.x,#lbrow,.fvb,.snd');}
 lb.addEventListener('touchstart',function(ev){if(ctl(ev))return;var t=ev.touches;
 if(t.length===2){stop();var m=mid(t);g={pinch:true,d:dist(t),s:Z.s,mx:m.x,my:m.y};ev.preventDefault();}
 else if(t.length===1){g={x0:t[0].clientX,y0:t[0].clientY,sx:Z.x,sy:Z.y,moved:false,noswipe:false};}},{passive:false});
@@ -273,6 +275,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);verti
 th{color:var(--mut);font-weight:600;font-size:12px}
 .small{color:var(--mut);font-size:12px}
 .badge{padding:2px 9px;border-radius:12px;font-size:12px;white-space:nowrap}
+.gc .badge{padding:1px 6px;font-size:10px}
 .green{background:#d8f3dc;color:#1b5e20}.red{background:#fde8e8;color:#8a1c1c}
 .amber{background:#fff1cc;color:#7a5200}.blue{background:#e1ecff;color:#1d4ed8}
 .grey{background:#ececec;color:#444}
@@ -307,7 +310,7 @@ align-items:center;justify-content:center;flex-direction:column;color:#fff}
 #lb{-webkit-user-select:none;user-select:none}
 #lb .stage,#lb img{touch-action:none}
 #lbb{position:fixed;display:none;pointer-events:none;z-index:1}
-#lbbx{background:none;border:1px solid #fff;color:#fff;border-radius:4px;padding:3px 10px;cursor:pointer;margin:0 8px 0 0;font-size:13px}
+#lb #lbbx,#lb #lbvid{background:none;border:1px solid #fff;color:#fff;border-radius:4px;padding:4px 14px;cursor:pointer;margin:0;font-size:14px}
 #lbd .lo{color:#c4c4c4;font-weight:500}.lo{color:#8a8a8a;font-weight:500}
 #lbd{white-space:pre-line;position:fixed;display:none;background:rgba(0,0,0,.65);color:#fff;font-size:14px;font-weight:600;padding:3px 10px;border-radius:4px;pointer-events:none;z-index:2}
 #lb img{max-width:calc(100vw - 150px);max-height:100%;border-radius:6px;
@@ -317,7 +320,9 @@ font-size:44px;padding:10px 18px;cursor:pointer;opacity:.85;margin:0}
 #lb #lbp{left:10px}#lb #lbn{right:10px}
 #lb .nav:disabled{opacity:.15;cursor:default}
 #lb .fvb{position:absolute;top:8px;left:16px;background:none;border:none;color:#fff;font-size:34px;cursor:pointer;margin:0;padding:0 6px;line-height:1.2;z-index:3}
-#lb .vid{position:absolute;top:14px;right:70px;z-index:3;font-size:13px;padding:5px 11px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;text-decoration:none;white-space:nowrap}
+#lb #lbrow{position:absolute;top:54px;left:16px;z-index:3;display:flex;gap:6px}
+#lb #lbrow button{background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;font-size:12px;padding:4px 10px;cursor:pointer;margin:0}
+#lb{padding-top:40px;box-sizing:border-box}#lb.hasl{padding-top:84px}
 #lb .snd{position:absolute;top:14px;left:70px;z-index:3;margin:0;font-size:13px;padding:5px 11px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:14px;max-width:calc(100vw - 160px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #lb .snd:disabled{opacity:.6}
 #lb #lbrow button.on{background:#6e9a35}

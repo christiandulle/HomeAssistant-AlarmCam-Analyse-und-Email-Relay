@@ -13,7 +13,7 @@ Es gibt genau einen Port. Ob die Kamera mit SSL/TLS, mit STARTTLS oder
 unverschluesselt sendet, wird pro Verbindung automatisch erkannt.
 """
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 import asyncio
 import hmac
@@ -66,7 +66,7 @@ TARGET_TIMEOUT = 60
 # Backup-Server (danach wird der Hauptserver wieder versucht); Wechsel nach einem Fehler sofort.
 BACKUP_SKIP_SECONDS = int(os.environ.get("RELAY_BACKUP_SKIP", "600"))
 FAILOVER_DELAY = int(os.environ.get("RELAY_FAILOVER_DELAY", "2"))
-IDLE_TIMEOUT = 60
+IDLE_TIMEOUT = 180
 DIAG_REFERENCE_HOST = os.environ.get("RELAY_DIAG_HOST", "smtp.gmail.com")
 
 # Der Standard erlaubt 1000 Zeichen pro Zeile. Manche Kameras halten sich nicht
