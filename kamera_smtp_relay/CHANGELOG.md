@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4
+
+- **Bessere Bildauswahl bei Videos:** Die Klassen-Anzahl entscheidet weiter zuerst. Unter den Bildern, deren Sicherheit höchstens 10 Prozentpunkte unter dem besten liegt, haben jetzt Bilder Vorrang, bei denen kein erkanntes Objekt den Bildrand berührt (nicht abgeschnitten). Danach gewinnt das Bild, auf dem die Objekte der Bildmitte am nächsten sind (bei mehreren Objekten nach Sicherheit gewichtet). Erst bei fast gleicher Lage entscheidet die Schärfe, zuletzt das mittlere Bild. Ein deutlich sichereres Bild (mehr als 10 Punkte) gewinnt weiter
+
 ## 1.3.3
 
 - **Login mit der RevierSpion-Adresse:** Beim SMTP-Login gilt zusätzlich zum festen Benutzer jede Adresse aus den erlaubten Domains (z. B. `5193_xxxxxx@revierspion.de`) als Benutzername. Das Passwort muss weiterhin stimmen und ist für alle Kameras gleich. Trägst du an der Reolink-Kamera die RevierSpion-Adresse als Absender ein, legt Reolink sie automatisch auch als Empfänger an, die Adresse `kamera@…` als zweiter Empfänger entfällt

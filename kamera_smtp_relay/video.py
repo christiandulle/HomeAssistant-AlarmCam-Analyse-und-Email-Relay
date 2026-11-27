@@ -3,13 +3,16 @@ import email
 import email.policy
 import io
 import logging
+import math
 from email.parser import BytesParser
 
 log = logging.getLogger("relay")
 
 # Zeitpunkte der Standbilder (Sekunden): die ersten 10 s alle 2 s, danach alle 4 s bis 30 s
 SAMPLE_SECONDS = (0, 2, 4, 6, 8, 10, 14, 18, 22, 26, 30)
-SHARP_BAND = 0.05   # liegen Frames bei der Sicherheit so nah beieinander, entscheidet die Schaerfe
+CONF_BAND = 0.10    # Bilder bis zu so viel unter der besten Sicherheit bleiben im Rennen, dann entscheidet die Lage im Bild
+EDGE = 0.01         # Objekte, die naeher als 1 % am Bildrand liegen, gelten als abgeschnitten
+CENTER_TIE = 0.03   # so nah beieinander liegende Mittennaehe gilt als gleich, dann entscheidet die Schaerfe
 VIDEO_EXT = {"video/mp4": "mp4", "video/quicktime": "mov", "video/x-msvideo": "avi", "video/x-matroska": "mkv",
              "video/webm": "webm", "video/mpeg": "mpg", "video/3gpp": "3gp"}
 VIDEO_TYPE = {"mp4": "video/mp4", "mov": "video/quicktime", "avi": "video/x-msvideo", "mkv": "video/x-matroska",
@@ -122,15 +125,49 @@ def _box_of(res):
     return None
 
 
+def _place_boxes(res):
+    """Rechtecke (Sicherheit, x1, y1, x2, y2) der erkannten Objekte; ohne Treffer die besten unter der Schwelle."""
+    boxes = res.get("boxes") or []
+    if boxes:
+        return [tuple(b[1:6]) for b in boxes]
+    low = res.get("low") or {}
+    return [(v[0], v[1], v[2], v[3], v[4]) for v in low.values() if v[3] - v[1] > 0.002 and v[4] - v[2] > 0.002]
+
+
+def placement(res):
+    """(am Rand abgeschnitten?, Naehe zur Bildmitte 0..1). Mehrere Objekte: nach Sicherheit gewichteter Durchschnitt.
+    Ohne Rechtecke neutral (nicht abgeschnitten, 0,5)."""
+    boxes = _place_boxes(res)
+    if not boxes:
+        return False, 0.5
+    cut, wsum, csum = False, 0.0, 0.0
+    for conf, x1, y1, x2, y2 in boxes:
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        d = min(1.0, math.hypot((cx - 0.5) / 0.5, (cy - 0.5) / 0.5) / math.sqrt(2))
+        csum += conf * (1.0 - d)
+        wsum += conf
+        if x1 <= EDGE or y1 <= EDGE or x2 >= 1 - EDGE or y2 >= 1 - EDGE:
+            cut = True
+    return cut, (csum / wsum if wsum else 0.5)
+
+
 def pick_best(cands):
-    """Waehlt den besten Kandidaten: {"t", "data", "res"}. Reihenfolge: meiste Klassen ueber der Schwelle, dann
-    hoechste Sicherheit; liegen mehrere nahe beieinander (SHARP_BAND), gewinnt der schaerfste, bei Gleichstand der
-    mittlere. Gibt (Kandidat, Schaerfe) zurueck."""
+    """Waehlt den besten Kandidaten: {"t", "data", "res"}. Reihenfolge: meiste Klassen ueber der Schwelle; unter den
+    Bildern mit hoechstens CONF_BAND weniger Sicherheit zuerst solche, bei denen kein Objekt den Bildrand beruehrt,
+    dann die mit den Objekten am naechsten zur Mitte; bei fast gleicher Lage das schaerfste, zuletzt das mittlere Bild.
+    Gibt (Kandidat, Schaerfe) zurueck (Schaerfe 0, wenn sie nicht gebraucht wurde)."""
     if not cands:
         return None, 0.0
     keyed = [(score(c["res"]), c) for c in cands]
     (n, top), _ = max(keyed, key=lambda kc: kc[0])
-    pool = [c for (cn, ct), c in keyed if cn == n and ct >= top - SHARP_BAND]
+    pool = [c for (cn, ct), c in keyed if cn == n and ct >= top - CONF_BAND]
+    if len(pool) == 1:
+        return pool[0], 0.0
+    placed = [(placement(c["res"]), c) for c in pool]
+    if any(not cut for (cut, _), _ in placed):
+        placed = [pc for pc in placed if not pc[0][0]]
+    best_center = max(ctr for (_, ctr), _ in placed)
+    pool = [c for (_, ctr), c in placed if ctr >= best_center - CENTER_TIE]
     if len(pool) == 1:
         return pool[0], 0.0
     sharp = [(sharpness(c["data"], _box_of(c["res"])), c) for c in pool]
