@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.3
+
+- **Login mit der RevierSpion-Adresse:** Beim SMTP-Login gilt zusätzlich zum festen Benutzer jede Adresse aus den erlaubten Domains (z. B. `5193_xxxxxx@revierspion.de`) als Benutzername. Das Passwort muss weiterhin stimmen und ist für alle Kameras gleich. Trägst du an der Reolink-Kamera die RevierSpion-Adresse als Absender ein, legt Reolink sie automatisch auch als Empfänger an, die Adresse `kamera@…` als zweiter Empfänger entfällt
+- Das Log nennt die Kamera sofort nach dem Login („Login ok von … - Kamera Revier Name (Adresse)“), auch wenn danach keine Mail ankommt. Bei einem fehlgeschlagenen Login steht der verwendete Benutzername im Log (nie das Passwort)
+- Die Sperre nach zu vielen falschen Logins gilt unverändert auch für Logins mit Adresse
+
 ## 1.3.2
 
 - Video im Vollbild: Auf Handy und Tablet (Touchscreen) startet das Video jetzt automatisch im Vollbild. Auf dem iPhone, auch mit Chrome, öffnet dafür der Vollbild-Player von iOS, nach „Fertig“ ist man wieder in der Vergrößerung. Am Rechner mit Maus startet das Video wie bisher klein in der Vergrößerung, der Vollbild-Knopf des Players bleibt dort verfügbar

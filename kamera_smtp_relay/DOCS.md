@@ -136,7 +136,7 @@ deshalb nummeriert und stehen in dieser Reihenfolge: 1 Funktionen, 2 Relay, 3 Zi
 | Parameter | Bedeutung |
 |---|---|
 | Relay: Port | **Pflichtfeld, kein Standard.** Frei wählbar (z. B. 20023, besser über 1024, viele Provider sperren Port 25). Am Router von außen weiterleiten und in jeder Kamera als SMTP-Port eintragen |
-| Relay: Benutzer | Login der Kameras (= Absenderadresse, mit @) |
+| Relay: Benutzer | Login der Kameras (= Absenderadresse, mit @). Zusätzlich gilt jede Adresse aus den erlaubten Domains als Benutzername (z. B. die RevierSpion-Adresse der Kamera), das Passwort ist für alle gleich |
 | Relay: Passwort | Passwort der Kameras (mindestens 12 Zeichen) |
 
 **2 Ziel-SMTP** (voreingestellt für RevierSpion)

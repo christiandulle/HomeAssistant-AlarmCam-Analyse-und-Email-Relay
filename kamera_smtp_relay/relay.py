@@ -13,7 +13,7 @@ Es gibt genau einen Port. Ob die Kamera mit SSL/TLS, mit STARTTLS oder
 unverschluesselt sendet, wird pro Verbindung automatisch erkannt.
 """
 
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 import asyncio
 import hmac
@@ -254,9 +254,10 @@ def load_config():
 class Authenticator:
     """Prueft Benutzer und Passwort der Kameras (ein Login fuer alle)."""
 
-    def __init__(self, user, password):
+    def __init__(self, user, password, domains=()):
         self._user = user.encode()
         self._password = password.encode()
+        self._domains = {d.strip().lower().lstrip("@") for d in domains if d and d.strip()}
         self._failed = {}
         self._lock = threading.Lock()
 
@@ -266,6 +267,14 @@ class Authenticator:
             return ipaddress.ip_address(ip).is_global
         except ValueError:
             return False
+
+    def camera_login(self, login):
+        """Ist der Benutzername eine Adresse aus den erlaubten Domains (z. B. die RevierSpion-Adresse der Kamera)?"""
+        login = (login or "").strip().lower()
+        if not self._domains or login.count("@") != 1 or len(login) > 120 or any(c.isspace() for c in login):
+            return ""
+        local, domain = login.split("@")
+        return login if local and domain in self._domains else ""
 
     def _is_locked(self, ip, now):
         with self._lock:
@@ -289,16 +298,23 @@ class Authenticator:
             note_session(session, "locked", "zu viele falsche Logins - Adresse zeitweise gesperrt", known=False)
             return AuthResult(success=False, handled=False)
         ok = False
+        shown = ""
         if isinstance(auth_data, LoginPassword):
             login = auth_data.login.decode("utf-8", "replace").strip().lower().encode()
             user_ok = hmac.compare_digest(login, self._user)
+            addr = self.camera_login(login.decode("utf-8", "replace"))
             pass_ok = hmac.compare_digest(auth_data.password, self._password)
-            ok = user_ok and pass_ok
+            ok = (user_ok or bool(addr)) and pass_ok
+            if ok and addr and not user_ok:
+                session.relay_camera = addr   # die Kamera meldet sich mit ihrer RevierSpion-Adresse an
+            elif not ok:
+                shown = login.decode("utf-8", "replace")[:60]
         if not ok:
             if public:
                 self._note_failure(ip, now)
             session.relay_stage = "Login fehlgeschlagen"
-            log.warning("Login fehlgeschlagen von %s (Benutzer oder Passwort falsch)", ip)
+            log.warning("Login fehlgeschlagen von %s (Benutzer oder Passwort falsch%s)", ip,
+                        ", Benutzer: %s" % shown if shown else "")
             if not getattr(session, "relay_login_failed", False):  # smtplib probiert mehrere Verfahren
                 session.relay_login_failed = True
                 note_session(session, "login_fail", "Benutzer oder Passwort falsch")
@@ -307,7 +323,7 @@ class Authenticator:
         encrypted = bool(transport and transport.get_extra_info("ssl_object"))
         session.relay_logged_in = True
         session.relay_stage = "Login ok, noch keine Mail gesendet"
-        log.info("Login ok von %s (%s)%s", ip, "verschluesselt" if encrypted else "unverschluesselt", who_ip(ip))
+        log.info("Login ok von %s (%s)%s", ip, "verschluesselt" if encrypted else "unverschluesselt", who_ip(ip, session))
         return AuthResult(success=True)
 
 
@@ -346,13 +362,16 @@ def note_session(session, outcome, detail="", camera=None, ip=None, mail_id=None
         log.debug("Auswertung: Eintrag fehlgeschlagen: %r", exc)
 
 
-def who_ip(ip):
+def who_ip(ip, session=None):
     """Beim Verbindungsaufbau ist die Kamera noch nicht bekannt (die Adresse kommt erst mit RCPT TO).
     Als Hinweis dient die Kamera, die zuletzt von dieser IP-Adresse gesendet hat."""
     store = NAME_STORE[0]
     if store is None or not ip or ip == "?":
         return ""
     try:
+        cam = getattr(session, "relay_camera", None) if session is not None else None
+        if cam:   # nach dem Login mit der RevierSpion-Adresse ist die Kamera sicher bekannt
+            return " - Kamera %s" % title_of(store.camera_map().get(cam), cam)
         cams = store.cameras_by_ip(ip)
         if not cams:
             return ""
@@ -388,7 +407,7 @@ class RelaySMTP(SMTP):
 
     async def smtp_STARTTLS(self, arg):
         self.session.relay_stage = "STARTTLS angefordert"
-        log.info("%s fordert STARTTLS an%s", peer_ip(self.session), who_ip(peer_ip(self.session)))
+        log.info("%s fordert STARTTLS an%s", peer_ip(self.session), who_ip(peer_ip(self.session), self.session))
         try:
             await super().smtp_STARTTLS(arg)
         except TLSSetupException as exc:
@@ -406,19 +425,19 @@ class RelaySMTP(SMTP):
             if stage.startswith("STARTTLS fehlgeschlagen"):
                 note_session(session, "starttls_fail", stage)
             elif not getattr(session, "relay_logged_in", False):
-                if stage not in ("verbunden, noch kein Befehl",) or who_ip(peer_ip(session)):
+                if stage not in ("verbunden, noch kein Befehl",) or who_ip(peer_ip(session), session):
                     note_session(session, "no_login", stage + (" (%s)" % error if error and str(error) else ""))
             else:
                 note_session(session, "no_mail", stage + (" (%s)" % error if error and str(error) else ""))
                 log.info("Verbindung von %s nach dem Login beendet, ohne dass eine Mail angekommen ist "
-                         "(letzter Schritt: %s)%s", peer_ip(session), stage, who_ip(peer_ip(session)))
+                         "(letzter Schritt: %s)%s", peer_ip(session), stage, who_ip(peer_ip(session), session))
         if session is not None and not getattr(session, "relay_logged_in", False):
             log.info(
                 "Verbindung von %s beendet ohne Login (letzter Schritt: %s)%s%s",
                 peer_ip(session),
                 getattr(session, "relay_stage", "verbunden, noch kein Befehl"),
                 ", Fehler: %s" % error if error and str(error) else "",
-                who_ip(peer_ip(session)),
+                who_ip(peer_ip(session), session),
             )
         super().connection_lost(error)
 
@@ -455,7 +474,7 @@ class RelayHandler:
     def handle_STARTTLS(self, server, session, envelope):
         session.relay_stage = "STARTTLS ok"
         session.relay_enc = "STARTTLS"
-        log.info("STARTTLS mit %s erfolgreich%s", peer_ip(session), who_ip(peer_ip(session)))
+        log.info("STARTTLS mit %s erfolgreich%s", peer_ip(session), who_ip(peer_ip(session), session))
         return True
 
     async def handle_RCPT(self, server, session, envelope, address, rcpt_options):
@@ -1118,7 +1137,7 @@ class RelayServer:
             detector=self.detector,
         )
         self.handler = RelayHandler(cfg, store, self.deliverer.wake, self.detector)
-        self.auth = Authenticator(cfg["relay_user"], cfg["relay_password"])
+        self.auth = Authenticator(cfg["relay_user"], cfg["relay_password"], cfg["allowed_domains"])
         self.loop = None
         self._tasks = set()
 
